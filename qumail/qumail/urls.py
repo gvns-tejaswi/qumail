@@ -1,0 +1,92 @@
+"""
+URL configuration for qumail project.
+
+The `urlpatterns` list routes URLs to views. For more information please see:
+    https://docs.djangoproject.com/en/6.0/topics/http/urls/
+Examples:
+Function views
+    1. Add an import:  from my_app import views
+    2. Add a URL to urlpatterns:  path('', views.home, name='home')
+Class-based views
+    1. Add an import:  from other_app.views import Home
+    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
+Including another URLconf
+    1. Import the include() function: from django.urls import include, path
+    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+"""
+from django import views
+from django.contrib import admin
+from django.urls import path
+from emailapp.views import forgot_password, get_starred_mails, register, login, reply_all, reset_password, save_draft, search_mails,send_mail,inbox,decrypt_mail, send_otp, toggle_star, verify_forgot_otp 
+from emailapp.views import reply_mail,get_drafts,get_sent_mails,get_trash_mails
+from emailapp.views import forward_mail
+from emailapp.views import delete_mail, trash, restore_mail
+from emailapp.views import edit_mail
+from emailapp.views import verify_otp
+from emailapp.views import star_mail
+from django.conf import settings
+from django.conf.urls.static import static
+from emailapp.views import download_attachment
+
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('register/', register),
+    path('login/', login),
+    path('sendMail/', send_mail),
+    path('inbox/', inbox),
+    path('decrypt-mail/<int:mail_id>/', decrypt_mail),
+    path('reply/', reply_mail),
+    path('forward/', forward_mail),
+    path('delete-mail/<int:mail_id>/', delete_mail),
+    path('trash/', trash),
+    path('trash-mail/', get_trash_mails),
+    path('edit/<int:mail_id>/', edit_mail),
+    path('send-otp/<int:mail_id>/', send_otp),
+    path('verify-otp/', verify_otp),
+    path('star-mail/<int:mail_id>/', star_mail),
+    path('restore-mail/<int:mail_id>/', restore_mail),
+    path(
+    'download-attachment/<int:mail_id>/',
+    download_attachment
+),
+path(
+    'search-mails/',
+    search_mails
+),
+path(
+    'forgot-password/',
+    forgot_password
+),
+
+path(
+    'reset-password/',
+    reset_password
+),
+path(
+    'reply-mail/<int:mail_id>/',
+    reply_mail
+),
+
+path(
+    'reply-all/<int:mail_id>/',
+    reply_all
+),
+path(
+    'verify-forgot-otp/',verify_forgot_otp
+),
+path(
+    "saveDraft/",
+    save_draft
+),
+path("drafts/", get_drafts),
+path("sent/", get_sent_mails),
+path("toggle-star/<int:mail_id>/", toggle_star),
+path("starred/", get_starred_mails),
+
+]
+
+urlpatterns += static(
+    settings.MEDIA_URL,
+    document_root=settings.MEDIA_ROOT
+)
