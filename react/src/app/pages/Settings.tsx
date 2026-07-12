@@ -37,9 +37,9 @@ function SectionCard({ children }: { children: React.ReactNode }) {
     <div
       className="rounded-2xl overflow-hidden"
       style={{
-        background: "#FFFDF9",
-        border: "1px solid #E6DDD2",
-        boxShadow: "0 4px 24px rgba(59,42,35,0.07), inset 0 1px 0 rgba(255,255,255,1)",
+        background: "#F8F2E8",
+        border: "1px solid #DCCFC0",
+        boxShadow: "0 8px 24px rgba(59,42,35,0.08)",
       }}
     >
       {children}
@@ -300,7 +300,7 @@ export default function Settings() {
           <SectionCard>
             <div
               className="relative px-5 pt-8 pb-6 flex flex-col items-center text-center"
-              style={{ background: "linear-gradient(135deg, rgba(184,155,94,0.06) 0%, rgba(184,155,94,0.02) 100%)" }}
+              style={{ background: "#F8F2E8" }}
             >
               <div className="absolute top-4 right-4 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "rgba(184,155,94,0.12)", color: accent }}>
                 <SettingsIcon size={13} />
@@ -312,10 +312,10 @@ export default function Settings() {
                   style={{
                     width: 88,
                     height: 88,
-                    background: "linear-gradient(135deg, #B89B5E, #A6874E)",
-                    boxShadow: "0 0 0 3px rgba(184,155,94,0.25), 0 12px 30px rgba(184,155,94,0.25)",
+                    background: "linear-gradient(135deg, #3B2A23 0%, #6B4232 60%, #8B5E3C 100%)",
+                    boxShadow: "0 0 0 3px rgba(184,155,94,0.35), 0 0 0 6px rgba(184,155,94,0.1), 0 12px 30px rgba(59,42,35,0.35)",
                     fontFamily: "Orbitron, sans-serif",
-                    color: "#FAF3E7",
+                    color: "#B89B5E",
                     fontSize: "1.5rem",
                     fontWeight: 800,
                   }}

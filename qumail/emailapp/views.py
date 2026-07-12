@@ -912,7 +912,9 @@ from .utils import (
     decrypt_file
 )
 
-@api_view(['GET'])
+from django.db.models import Q
+
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def search_mails(request):
 
@@ -946,6 +948,8 @@ def search_mails(request):
             "is_starred": mail.is_starred,
             "hasAttachment": bool(mail.encrypted_attachment)
         })
+    print("Keyword:", keyword)
+    print("Matched mails:", mails.count())
 
     return Response(data)
 

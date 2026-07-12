@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link,useNavigate } from "react-router";
 import {
   Send,
   FileText,
@@ -86,20 +86,20 @@ export default function Dashboard() {
     }
   };
 
-  const fetchEmails = async () => {
+  const fetchEmails = async (folder: MailFolder = activeFolder) => {
     try {
       const token = localStorage.getItem("access");
       let endpoint = "";
 
-      if (activeFolder === "inbox") {
+      if (folder === "inbox") {
         endpoint = "http://127.0.0.1:8000/inbox/";
-      } else if (activeFolder === "drafts") {
+      } else if (folder === "drafts") {
         endpoint = "http://127.0.0.1:8000/drafts/";
-      } else if (activeFolder === "sent") {
+      } else if (folder === "sent") {
         endpoint = "http://127.0.0.1:8000/sent/";
-      } else if (activeFolder === "starred") {
+      } else if (folder === "starred") {
         endpoint = "http://127.0.0.1:8000/starred/";
-      } else if (activeFolder === "trash") {
+      } else if (folder === "trash") {
         endpoint = "http://127.0.0.1:8000/trash-mail/";
       } else {
         setEmails([]);
@@ -112,7 +112,7 @@ export default function Dashboard() {
       const data = await response.json();
       console.log(data);
 
-      if (activeFolder === "drafts") {
+      if (folder === "drafts") {
         const formattedDrafts = data.map((draft: any) => ({
           ...draft,
           sender: draft.receivers || "Draft",
@@ -128,6 +128,17 @@ export default function Dashboard() {
       console.log(error);
     }
   };
+  const handleLogoClick = async (
+  e: React.MouseEvent<HTMLAnchorElement>
+) => {
+  e.preventDefault();
+
+  setSearchQuery("");      // Clear search
+  setActiveFolder("inbox"); // Go back to Inbox
+
+  await fetchMailCounts();
+  await fetchEmails();
+};
 
   const folders = [
     { id: "inbox", label: "Inbox", icon: Inbox, count: mailCounts.inbox },
@@ -153,29 +164,33 @@ export default function Dashboard() {
           boxShadow: "0 4px 40px rgba(59,42,35,0.12)",
         }}
       >
-        {/* Logo */}
-        <Link to="/" className="flex items-center gap-3 flex-shrink-0 no-underline">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center"
-            style={{
-              background: "rgba(184,155,94,0.18)",
-              border: "1px solid rgba(184,155,94,0.45)",
-            }}
+        <Link
+          to="/"
+            onClick={handleLogoClick}
+            className="flex items-center gap-3 flex-shrink-0 no-underline"
           >
-            <span
-              className="font-black text-base"
-              style={{ fontFamily: "Orbitron, sans-serif", color: "#B89B5E" }}
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center"
+              style={{
+                background: "rgba(184,155,94,0.18)",
+                border: "1px solid rgba(184,155,94,0.45)",
+              }}
             >
-              Q
+              <span
+                className="font-black text-base"
+                style={{ fontFamily: "Orbitron, sans-serif", color: "#B89B5E" }}
+              >
+                Q
+              </span>
+            </div>
+
+            <span
+              className="text-lg font-bold tracking-widest"
+              style={{ fontFamily: "Orbitron, sans-serif", color: "#FAF3E7" }}
+            >
+              Qumail
             </span>
-          </div>
-          <span
-            className="text-lg font-bold tracking-widest"
-            style={{ fontFamily: "Orbitron, sans-serif", color: "#FAF3E7" }}
-          >
-            Qumail
-          </span>
-        </Link>
+          </Link>
 
         {/* Center tagline */}
         <div className="hidden md:flex flex-1 justify-center px-4">
@@ -190,37 +205,15 @@ export default function Dashboard() {
         {/* Right controls */}
         <div className="flex items-center gap-3 flex-shrink-0">
           <button
-            className="w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105"
-            style={{
-              background: "rgba(184,155,94,0.12)",
-              border: "1px solid rgba(184,155,94,0.28)",
-              color: "#B89B5E",
-            }}
-          >
-            <Bell className="w-4 h-4" />
-          </button>
-
-          <button
             onClick={() => navigate("/settings")}
             className="w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105"
             style={{
-              background: "rgba(184,155,94,0.12)",
-              border: "1px solid rgba(184,155,94,0.28)",
-              color: "#B89B5E",
+              background: "#bb9b5e",
+              border: "1px solid rgba(184, 155, 94, 0.35)",
+              color: "#faf3e7",
             }}
           >
             <Settings className="w-4 h-4" />
-          </button>
-
-          <button
-            className="w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105"
-            style={{
-              background: "#B89B5E",
-              border: "1px solid rgba(184,155,94,0.5)",
-              color: "#FAF3E7",
-            }}
-          >
-            <User className="w-4 h-4" />
           </button>
         </div>
       </nav>
@@ -320,29 +313,6 @@ export default function Dashboard() {
                   onBlur={e => (e.currentTarget.style.borderColor = "#DCCFC0")}
                 />
               </div>
-
-              <button
-                className="w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105"
-                style={{
-                  background: "rgba(184,155,94,0.1)",
-                  border: "1px solid rgba(184,155,94,0.28)",
-                  color: "#B89B5E",
-                }}
-              >
-                <Filter className="w-4 h-4" />
-              </button>
-
-              <button
-                className="w-10 h-10 rounded-lg flex items-center justify-center hover:scale-105 hover:rotate-180"
-                style={{
-                  background: "rgba(184,155,94,0.1)",
-                  border: "1px solid rgba(184,155,94,0.28)",
-                  color: "#B89B5E",
-                  transition: "all 0.3s",
-                }}
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
             </div>
           </div>
 
@@ -494,3 +464,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

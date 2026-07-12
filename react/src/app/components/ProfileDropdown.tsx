@@ -45,16 +45,14 @@ export function ProfileDropdown({ isDark }: ProfileDropdownProps) {
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105"
-        style={{
-          background: isDark
-            ? "linear-gradient(135deg, #00d4ff, #a855f7)"
-            : "linear-gradient(135deg, #0082b4, #7c3aed)",
-          border: isDark ? "1px solid rgba(0,212,255,0.4)" : "1px solid rgba(0,100,200,0.4)",
-          color: "#ffffff",
-          fontFamily: "Orbitron, sans-serif",
-          fontSize: "0.75rem",
-          fontWeight: 700,
-        }}
+          style={{
+                background: "#B89B5E",
+                border: "1px solid rgba(184,155,94,0.35)",
+                color: "#FAF3E7",
+                fontFamily: "Orbitron, sans-serif",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+              }}
       >
         <User className="w-4 h-4" />
       </button>
