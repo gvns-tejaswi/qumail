@@ -1,3 +1,5 @@
+from urllib import request
+
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -95,14 +97,42 @@ class UserProfile(models.Model):
 
     otp = models.CharField(max_length=6, default="")
     otp_verified = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
 
 
     def __str__(self):
         return self.user.username
 
-class LoginActivity(models.Model):
 
+class DeletedEmail(models.Model):
+
+    original_mail_id = models.IntegerField()
+
+    sender = models.CharField(max_length=255)
+    receiver = models.CharField(max_length=255)
+
+    subject = models.TextField()
+    message = models.TextField()
+
+    encrypted_message = models.TextField()
+    iv = models.TextField()
+    auth_tag = models.TextField()
+    key = models.TextField()
+    key_id = models.TextField()
+
+    attachment = models.FileField(
+        upload_to='deleted_attachments/',
+        null=True,
+        blank=True
+    )
+
+    deleted_at = models.DateTimeField(auto_now_add=True)
+
+from django.utils import timezone
+
+class LoginActivity(models.Model):
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE
@@ -110,14 +140,31 @@ class LoginActivity(models.Model):
 
     ip_address = models.CharField(max_length=100)
 
+    device = models.TextField()
+
     login_time = models.DateTimeField(
         auto_now_add=True
     )
 
-    device = models.TextField()
+    logout_time = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    is_active = models.BooleanField(
+        default=True
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=[
+            ("SUCCESS", "SUCCESS"),
+            ("FAILED", "FAILED"),
+        ],
+        default="SUCCESS"
+    )
 
     def __str__(self):
-
         return self.user.username
 
 from django.utils import timezone

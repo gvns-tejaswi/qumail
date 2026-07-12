@@ -1,5 +1,6 @@
 import re
 from django.contrib.auth.models import User
+from django.db.models import Q
 from requests import request
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
@@ -50,12 +51,13 @@ def register(request):
 
 
     # 🔴 Email validation
-    if not email.endswith("qumail.io"):
-
-        return Response({
-            "error": "Email must end with '.io'"
-        }, status=400)
-
+    if not email.lower().endswith("@qumail.io"):
+        return Response(
+            {
+                "error": "Email must end with '@qumail.io'"
+            },
+            status=400
+        )
 
     # 🔴 Phone validation
     if len(phone_number) != 10:
@@ -151,9 +153,36 @@ def login(request):
     username = request.data.get('username')  # email
     password = request.data.get('password')
 
+    ip = request.META.get('REMOTE_ADDR')
+    device = request.META.get(
+        'HTTP_USER_AGENT',
+        'Unknown Device'
+    )
+
+    try:
+        existing_user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        existing_user = None
+
+    if existing_user and not existing_user.is_active:
+        return Response(
+            {
+                "error": "This account has been deleted."
+            },
+            status=403
+        )
+
     user = authenticate(username=username, password=password)
 
     if user is None:
+        if existing_user:
+            LoginActivity.objects.create(
+                user=existing_user,
+                ip_address=ip,
+                device=device,
+                status="FAILED",
+                is_active=False
+            )
         return Response({"error": "Invalid credentials"}, status=401)
 
     refresh = RefreshToken.for_user(user)
@@ -169,12 +198,12 @@ def login(request):
     aws_secret_access_key="p4TzrjRCIJKg6a0SxkGuHKOQmfn7fl3/NTAiEd9h"
     )
 
-    ip = request.META.get('REMOTE_ADDR')
-    device = request.META.get('HTTP_USER_AGENT')
     LoginActivity.objects.create(
         user=user,
         ip_address=ip,
-        device=device
+        device=device,
+        status="SUCCESS",
+        is_active=True
     )
 
     profile = UserProfile.objects.get(
@@ -279,6 +308,11 @@ def send_mail(request):
 
         except User.DoesNotExist:
 
+            continue
+
+        profile = UserProfile.objects.get(user=receiver)
+
+        if profile.is_deleted:
             continue
 
         email = Email.objects.create(
@@ -476,8 +510,15 @@ def decrypt_mail(request, mail_id):
         "subject": mail.subject,
 
         "message": decrypted_text,
+        "attachments": [
+    {
+        "id": mail.id,
+        "name": mail.encrypted_attachment.name.split('/')[-1].replace('.enc', ''),
+        "size": "Secure File",
+        "encrypted": True
+    }
 
-        "attachment": attachment_url,
+] if mail.encrypted_attachment else [],
 
         "created_at": mail.created_at.strftime("%d %b %Y, %I:%M %p"),
         "is_read": mail.is_read,
@@ -560,66 +601,12 @@ def download_attachment(request, mail_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def reply_mail(request):
-
-    mail_id = request.data.get('mail_id')
-
-    reply_message = request.data.get('message')
-
-    try:
-
-        original_mail = Email.objects.get(
-            id=mail_id,
-            receiver=request.user
-        )
-
-    except Email.DoesNotExist:
-
-        return Response({
-            "error": "Mail not found"
-        }, status=404)
-
-    # � Mark original mail replied
-    original_mail.is_replied = True
-    original_mail.save()
-
-    # �🔐 Encrypt reply
-    encrypted_data = encrypt_message(reply_message)
-
-    # ✅ Save reply
-    Email.objects.create(
-
-        sender=request.user,
-
-        receiver=original_mail.sender,
-
-        subject="RE: " + original_mail.subject,
-
-        message=reply_message,
-
-        encrypted_message=encrypted_data["encrypted"],
-
-        iv=encrypted_data["iv"],
-
-        auth_tag=encrypted_data["auth_tag"],
-
-        key_id=encrypted_data["key_id"],
-
-        key=encrypted_data["key"]
-    )
-
-    return Response({
-        "message": "Reply sent successfully"
-    })
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def forward_mail(request):
 
     mail_id = request.data.get('mail_id')
 
-    new_receiver_email = request.data.get('receiver')
-
+    #new_receiver_email = request.data.get('receiver')
+    receivers = request.data.get("receivers", [])
     # 🔍 Find original mail
     try:
 
@@ -634,46 +621,37 @@ def forward_mail(request):
             "error": "Mail not found"
         }, status=404)
 
-    # 🔍 Find new receiver
-    try:
-
-        new_receiver = User.objects.get(
-            username=new_receiver_email
-        )
-
-    except User.DoesNotExist:
-
-        return Response({
-            "error": "Receiver not found"
-        }, status=404)
-
     # 🔐 Encrypt again
     encrypted_data = encrypt_message(
         original_mail.message
     )
 
-    # ✅ Save forwarded mail
+    for receiver_email in receivers:
+        try:
+            new_receiver = User.objects.get(
+            username=receiver_email
+        )
+        except User.DoesNotExist:
+            continue
+        encrypted_data = encrypt_message(
+        original_mail.message
+    )
     Email.objects.create(
 
         sender=request.user,
-
         receiver=new_receiver,
-
-        subject="FWD: " + original_mail.subject,
-
+       subject="FWD: " + original_mail.subject,
         message=original_mail.message,
-
         encrypted_message=encrypted_data["encrypted"],
-
         iv=encrypted_data["iv"],
-
         auth_tag=encrypted_data["auth_tag"],
-
         key_id=encrypted_data["key_id"],
-
-        key=encrypted_data["key"]
+        key=encrypted_data["key"],
+        # ✅ Forward attachment too
+        encrypted_attachment=original_mail.encrypted_attachment,
+        attachment_iv=original_mail.attachment_iv,
+        attachment_auth_tag=original_mail.attachment_auth_tag,
     )
-
     return Response({
         "message": "Mail forwarded successfully"
     })
@@ -939,53 +917,34 @@ from .utils import (
 def search_mails(request):
 
     user = request.user
-
-    mail_id = request.GET.get('mail_id')
-
-    subject = request.GET.get('subject')
-
-    date = request.GET.get('date')
+    keyword = request.GET.get("q", "").strip()
 
     mails = Email.objects.filter(
-        receiver=user
+        receiver=user,
+        is_deleted=False
     )
 
-    # 🔍 Search by Mail ID
-    if mail_id:
-
+    if keyword:
         mails = mails.filter(
-            id=mail_id
-        )
-
-    # 🔍 Search by Subject
-    if subject:
-
-        mails = mails.filter(
-            subject__icontains=subject
-        )
-
-    # 🔍 Search by Date
-    if date:
-
-        mails = mails.filter(
-            created_at__date=date
+            Q(sender__username__icontains=keyword) |
+            Q(sender__first_name__icontains=keyword) |
+            Q(subject__icontains=keyword) |
+            Q(message__icontains=keyword)
         )
 
     data = []
 
     for mail in mails:
-
         data.append({
-
-            "mail_id": mail.id,
-
+            "id": mail.id,
             "sender": mail.sender.username,
-
             "subject": mail.subject,
-
-            "date": mail.created_at,
-
-            "is_read": mail.is_read
+            "preview": mail.message[:50],
+            "time": mail.created_at.strftime("%d %b %Y, %I:%M %p"),
+            "avatar": mail.sender.username[0].upper(),
+            "unread": not mail.is_read,
+            "is_starred": mail.is_starred,
+            "hasAttachment": bool(mail.encrypted_attachment)
         })
 
     return Response(data)
@@ -1171,30 +1130,33 @@ def reset_password(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def reply_mail(request, mail_id):
-
     try:
-
         original_mail = Email.objects.get(
             id=mail_id
         )
-
     except Email.DoesNotExist:
-
         return Response({
-
             "error": "Mail not found"
-
         }, status=404)
-
     message = request.data.get(
         'message'
     )
-
+    attachment = request.FILES.get("attachment")
     encrypted_data = encrypt_message(
         message
     )
-
-    Email.objects.create(
+    encrypted_attachment_file = None
+    if attachment:
+        file_data = attachment.read()
+        key = bytes.fromhex(
+        encrypted_data["key"]
+    )
+        encrypted_attachment_file = encrypt_file(
+        file_data,
+        key
+    )
+        
+    email = Email.objects.create(
 
         sender=request.user,
 
@@ -1203,9 +1165,8 @@ def reply_mail(request, mail_id):
         subject="RE: " + original_mail.subject,
 
         message=message,
-
-        encrypted_message=
-        encrypted_data["encrypted"],
+        
+        encrypted_message= encrypted_data["encrypted"],
 
         iv=encrypted_data["iv"],
 
@@ -1219,7 +1180,25 @@ def reply_mail(request, mail_id):
 
         is_replied=True
     )
-
+    if attachment and encrypted_attachment_file:
+        email.attachment_iv = (
+        encrypted_attachment_file["iv"].hex()
+    )
+        email.attachment_auth_tag = (
+        encrypted_attachment_file["tag"].hex()
+    )
+        email.save()
+        encrypted_filename = (
+        attachment.name + ".enc"
+    )
+        email.encrypted_attachment.save(
+            encrypted_filename,
+            ContentFile(
+                encrypted_attachment_file[
+                "encrypted_file"
+            ]
+        )
+    )
     return Response({
 
         "message":
@@ -1520,3 +1499,322 @@ def get_trash_mails(request):
         })
 
     return Response(data)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_users(request):
+
+    users = User.objects.exclude(id=request.user.id)
+
+    data = []
+
+    for user in users:
+        data.append({
+            "username": user.username,
+            "name": user.first_name or user.username
+        })
+
+    return Response(data)
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def update_phone(request):
+    profile = UserProfile.objects.get(user=request.user)
+
+    profile.phone_number = request.data.get("phone")
+    profile.save()
+
+    return Response({
+        "message": "Phone updated successfully"
+    })
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profile(request):
+    profile = UserProfile.objects.get(user=request.user)
+
+    return Response({
+        "username": request.user.first_name ,
+        "email": request.user.email,
+        "phone": profile.phone_number,
+    })
+
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from .models import LoginActivity
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def logout_user(request):
+
+    activity = (
+        LoginActivity.objects.filter(
+            user=request.user,
+            is_active=True
+        )
+        .order_by("-login_time")
+        .first()
+    )
+
+    if activity:
+        activity.logout_time = timezone.now()
+        activity.is_active = False
+        activity.save()
+
+    return Response({
+        "message": "Logged out successfully"
+    })
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from .models import LoginActivity
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def login_history(request):
+
+    activities = (
+        LoginActivity.objects.filter(
+            user=request.user
+        )
+        .order_by("-login_time")
+    )[:5]
+
+    data = []
+
+    for item in activities:
+        data.append({
+            "id": item.id,
+            "device": item.device,
+            "ip_address": item.ip_address,
+            "login_time": item.login_time.strftime(
+                "%d %b %Y, %I:%M %p"
+            ),
+            "logout_time": (
+                item.logout_time.strftime(
+                    "%d %b %Y, %I:%M %p"
+                )
+                if item.logout_time
+                else None
+            ),
+            "status": (
+                item.status
+            ),
+        })
+
+    return Response(data)
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+
+    current_password = request.data.get("current_password")
+    new_password = request.data.get("new_password")
+    confirm_password = request.data.get("confirm_password")
+
+    # Check current password
+    if not request.user.check_password(current_password):
+        return Response(
+            {"error": "Current password is incorrect"},
+            status=400
+        )
+
+    # Check new password confirmation
+    if new_password != confirm_password:
+        return Response(
+            {"error": "New password and confirm password do not match"},
+            status=400
+        )
+
+    # Prevent using the same password
+    if current_password == new_password:
+        return Response(
+            {"error": "New password cannot be the same as the current password"},
+            status=400
+        )
+
+    # Update password
+    request.user.set_password(new_password)
+    request.user.save()
+
+    return Response({
+        "message": "Password changed successfully"
+    })
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from .models import Email, LoginActivity
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from .models import Email, LoginActivity
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def activity_statistics(request):
+
+    sent_count = Email.objects.filter(
+        sender=request.user,
+        is_draft=False
+    ).count()
+
+    received_count = Email.objects.filter(
+        receiver=request.user,
+        is_draft=False
+    ).count()
+
+    login_history = LoginActivity.objects.filter(
+        user=request.user
+    ).order_by("-login_time")[:5]
+
+    history = []
+
+    for login in login_history:
+        history.append({
+            "id": login.id,
+            "device": login.device,
+            "login_time": login.login_time.strftime(
+                "%d %b %Y, %I:%M %p"
+            ),
+            "status": login.status
+        })
+
+    return Response({
+        "emails_sent": sent_count,
+        "emails_received": received_count,
+        "recent_login_history": history
+    })
+
+from django.utils import timezone
+from django.contrib.auth import authenticate
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes
+
+from .models import Email, DeletedEmail, UserProfile
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def delete_account(request):
+
+    password = request.data.get("password")
+
+    user = authenticate(
+        username=request.user.username,
+        password=password
+    )
+
+    if not user:
+        return Response(
+            {"error": "Incorrect password"},
+            status=400
+        )
+
+    profile = UserProfile.objects.get(user=request.user)
+
+    profile.is_deleted = True
+    profile.deleted_at = timezone.now()
+    profile.save()
+
+    request.user.is_active = False
+    request.user.save()
+
+    emails = Email.objects.filter(
+        sender=request.user
+    ) | Email.objects.filter(
+        receiver=request.user
+    )
+
+    for mail in emails:
+
+        DeletedEmail.objects.create(
+
+            original_mail_id=mail.id,
+
+            sender=mail.sender.username,
+
+            receiver=mail.receiver.username,
+
+            subject=mail.subject,
+
+            message=mail.message,
+
+            encrypted_message=mail.encrypted_message,
+
+            iv=mail.iv,
+
+            auth_tag=mail.auth_tag,
+
+            key=mail.key,
+
+            key_id=mail.key_id,
+
+            attachment=mail.encrypted_attachment
+        )
+
+        mail.delete()
+
+    return Response({
+        "message": "Account deleted successfully."
+    })
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from .models import Email
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def mail_counts(request):
+
+    user = request.user
+
+    inbox = Email.objects.filter(
+        receiver=user,
+        is_deleted=False,
+        is_draft=False
+    ).count()
+
+    sent = Email.objects.filter(
+        sender=user,
+        is_draft=False,
+        is_deleted=False
+    ).count()
+
+    drafts = Email.objects.filter(
+        sender=user,
+        is_draft=True
+    ).count()
+
+    starred = Email.objects.filter(
+        receiver=user,
+        is_starred=True,
+        is_deleted=False
+    ).count()
+
+    trash = Email.objects.filter(
+        receiver=user,
+        is_deleted=True
+    ).count()
+
+    return Response({
+        "inbox": inbox,
+        "sent": sent,
+        "drafts": drafts,
+        "starred": starred,
+        "trash": trash,
+    })

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { User, KeyRound, LogOut } from "lucide-react";
+import { logout } from "../utils/auth";
 
 interface ProfileDropdownProps {
   isDark: boolean;
@@ -33,9 +34,10 @@ export function ProfileDropdown({ isDark }: ProfileDropdownProps) {
     navigate("/change-password");
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setIsOpen(false);
-    navigate("/");
+    await logout();
+    navigate("/login");
   };
 
   return (
