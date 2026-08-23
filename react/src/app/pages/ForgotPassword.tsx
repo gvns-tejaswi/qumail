@@ -133,6 +133,18 @@ const handleVerifyOTP = async (
 
   e.preventDefault();
 
+  const cleanOtp = otp.toLowerCase();
+
+  if (cleanOtp.length !== 6) {
+    alert("Please enter the 6-character OTP.");
+    return;
+  }
+
+  if (!/^[a-z0-9]{6}$/.test(cleanOtp)) {
+    alert("OTP must contain only lowercase letters and numbers.");
+    return;
+  }
+
   try {
 
     const response = await fetch(
@@ -152,7 +164,7 @@ const handleVerifyOTP = async (
 
           email: email,
 
-          otp: otp
+          otp: cleanOtp
         })
       }
     );
@@ -369,7 +381,7 @@ const handleResetPassword = async (
             </h1>
             <p className="text-xs leading-relaxed" style={{ opacity: 0.44 }}>
               {step === "email" && "Enter your registered Qumail address to receive OTP verification."}
-              {step === "otp" && "We've sent a 6-digit code to your email. Enter it below to continue."}
+              {step === "otp" && "We've sent a 6-character code to your phone. Enter it below to continue."}
               {step === "reset" && "Choose a strong password to secure your quantum vault."}
               {step === "success" && "Your password has been successfully reset. You can now sign in."}
             </p>
@@ -431,7 +443,13 @@ const handleResetPassword = async (
                   <InputOTP
                     maxLength={6}
                     value={otp}
-                    onChange={(value) => setOtp(value)}
+                    onChange={(value) => {
+                      const cleanValue = value.toLowerCase();
+
+                      if (/^[a-z0-9]*$/.test(cleanValue)) {
+                        setOtp(cleanValue);
+                      }
+                    }}
                   >
                     <InputOTPGroup>
                       {[0, 1, 2, 3, 4, 5].map((index) => (

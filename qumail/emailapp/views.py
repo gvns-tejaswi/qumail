@@ -14,7 +14,8 @@ from .models import LoginActivity, UserProfile
 from .utils import encrypt_message
 from .utils import decrypt_message
 from .models import OTP
-import random
+import secrets
+import string
 import boto3
 
 
@@ -1047,7 +1048,10 @@ def edit_mail(request, mail_id):
 @permission_classes([IsAuthenticated])
 def send_otp(request, mail_id):
 
-    otp = str(random.randint(100000, 999999))
+    otp = ''.join(
+        secrets.choice(string.ascii_lowercase + string.digits)
+        for _ in range(6)
+    )
     OTP.objects.create(
 
     user=request.user,
@@ -1281,10 +1285,10 @@ def forgot_password(request):
         user=user
     )
 
-    otp = str(random.randint(
-        100000,
-        999999
-    ))
+    otp = ''.join(
+        secrets.choice(string.ascii_lowercase + string.digits)
+        for _ in range(6)
+    )
 
     OTP.objects.create(
 
@@ -2333,3 +2337,35 @@ def mail_counts(request):
         "starred": starred,
         "trash": trash,
     })
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def permanent_delete_mail(request, mail_id):
+
+    try:
+        mail = Email.objects.get(
+            id=mail_id,
+            is_deleted=True
+        )
+    except Email.DoesNotExist:
+        return Response(
+            {"error": "Mail not found in trash"},
+            status=404
+        )
+
+    # Only the user who moved it to Trash can permanently delete it
+    if (
+        (mail.sender == request.user and mail.deleted_from == "sent")
+        or
+        (mail.receiver == request.user and mail.deleted_from == "inbox")
+    ):
+        mail.delete()
+
+        return Response({
+            "message": "Mail permanently deleted"
+        }, status=200)
+
+    return Response(
+        {"error": "Unauthorized"},
+        status=403
+    )

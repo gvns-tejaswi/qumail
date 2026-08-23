@@ -38,6 +38,7 @@ export default function ReadEmail() {
   const [showNotification, setShowNotification] = useState(false);
   const [showSectionMessage, setShowSectionMessage] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showPermanentDeleteDialog, setShowPermanentDeleteDialog] = useState(false);
   const [showForwardDialog, setShowForwardDialog] = useState(false);
   const [forwardSearch, setForwardSearch] = useState("");
   const [users, setUsers] = useState<{ username: string }[]>([]);
@@ -104,6 +105,17 @@ export default function ReadEmail() {
 
   const handleVerifyOtp = async () => {
     const enteredOtp = otp.join("");
+
+    if (enteredOtp.length !== 6) {
+      alert("Please enter the 6-character OTP.");
+      return;
+    }
+
+    if (!/^[a-z0-9]{6}$/.test(enteredOtp)) {
+      alert("OTP must contain only lowercase letters and numbers.");
+      return;
+    }
+
     try {
       const token = localStorage.getItem("access");
       const response = await fetch("http://127.0.0.1:8000/verify-otp/", {
@@ -139,11 +151,16 @@ export default function ReadEmail() {
   };
 
   const handleOtpChange = (index: number, value: string) => {
-    if (!/^\d*$/.test(value)) return;
+    const cleanValue = value.toLowerCase();
+
+    if (!/^[a-z0-9]?$/.test(cleanValue)) return;
+
     const updatedOtp = [...otp];
-    updatedOtp[index] = value;
+    updatedOtp[index] = cleanValue;
     setOtp(updatedOtp);
-    if (value && index < 5) document.getElementById(`otp-${index + 1}`)?.focus();
+    if (cleanValue && index < 5) {
+      document.getElementById(`otp-${index + 1}`)?.focus();
+    }
   };
 
   const handleResendOtp = async () => {
@@ -616,7 +633,7 @@ const handlePermanentDelete = async () => {
                     </button>
 
                     <button
-                      onClick={handlePermanentDelete}
+                      onClick={() => setShowPermanentDeleteDialog(true)}
                       className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium"
                       style={{
                         background: "rgba(204,0,0,0.08)",
@@ -1177,6 +1194,87 @@ const handlePermanentDelete = async () => {
               <div className="flex gap-3">
                 <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl font-semibold tracking-wide uppercase transition-all duration-200 hover:scale-[1.02]" style={{ background: "rgba(184,155,94,0.1)", border: "1px solid rgba(184,155,94,0.28)", color: "#B89B5E", fontFamily: "Orbitron, sans-serif", fontSize: "0.7rem", letterSpacing: "0.15em" }}>Cancel</button>
                 <button onClick={handleDeleteMail} className="flex-1 py-2.5 rounded-xl font-semibold tracking-wide uppercase transition-all duration-200 hover:scale-[1.02]" style={{ background: "linear-gradient(135deg, #cc0000, #990000)", color: "#ffffff", boxShadow: "0 4px 22px rgba(204,0,0,0.3)", fontFamily: "Orbitron, sans-serif", fontSize: "0.7rem", letterSpacing: "0.15em" }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPermanentDeleteDialog && (
+        <div
+          className="fixed inset-0 flex items-center justify-center"
+          style={{
+            background: "rgba(59,42,35,0.55)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+            zIndex: 1001,
+          }}
+          onClick={() => setShowPermanentDeleteDialog(false)}
+        >
+          <div
+            className="rounded-2xl overflow-hidden w-full max-w-md mx-4"
+            style={{
+              background: "#FFFDF9",
+              border: "1px solid #E6DDD2",
+              boxShadow: "0 24px 80px rgba(59,42,35,0.18)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div
+                  className="w-10 h-10 rounded-lg flex items-center justify-center"
+                  style={{ background: "rgba(204,0,0,0.1)" }}
+                >
+                  <Trash2 className="w-5 h-5" style={{ color: "#cc0000" }} />
+                </div>
+
+                <h3
+                  className="text-lg font-bold"
+                  style={{
+                    fontFamily: "Orbitron, sans-serif",
+                    color: "#3B2A23",
+                  }}
+                >
+                  Permanently Delete Email?
+                </h3>
+              </div>
+
+              <p
+                className="text-sm mb-6"
+                style={{ color: "#7A6D63", lineHeight: "1.6" }}
+              >
+                Are you sure you want to permanently delete this email?
+                This action cannot be undone and the email cannot be recovered.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowPermanentDeleteDialog(false)}
+                  className="flex-1 py-2.5 rounded-xl font-semibold"
+                  style={{
+                    background: "rgba(184,155,94,0.1)",
+                    border: "1px solid rgba(184,155,94,0.28)",
+                    color: "#B89B5E",
+                  }}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowPermanentDeleteDialog(false);
+                    handlePermanentDelete();
+                  }}
+                  className="flex-1 py-2.5 rounded-xl font-semibold"
+                  style={{
+                    background: "linear-gradient(135deg, #cc0000, #990000)",
+                    color: "#ffffff",
+                    boxShadow: "0 4px 22px rgba(204,0,0,0.3)",
+                  }}
+                >
+                  Delete Permanently
+                </button>
               </div>
             </div>
           </div>
