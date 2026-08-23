@@ -133,7 +133,11 @@ function Navbar() {
       }}
     >
       {/* Logo */}
-      <Link to="/" className="flex items-center gap-3 flex-shrink-0 no-underline">
+      <Link
+        to="/"
+        className="flex items-center gap-3 flex-shrink-0 no-underline"
+        style={{ cursor: "default" }}
+      >
         <div
           className="relative w-9 h-9 rounded-xl flex items-center justify-center"
           style={{

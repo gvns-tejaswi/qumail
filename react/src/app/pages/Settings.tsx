@@ -88,6 +88,7 @@ export default function Settings() {
 
   const [showSignOutDialog, setShowSignOutDialog] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [activeInfo, setActiveInfo] = useState<string | null>(null);
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -258,6 +259,21 @@ export default function Settings() {
     { icon: <HelpCircle size={15} />, label: "Contact Support", meta: "" },
     { icon: <Code2 size={15} />, label: "Developer Information", meta: "" },
   ];
+
+  const informationData: Record<string, string> = {
+    "About Qumail":
+      "Qumail is a quantum-secure email communication platform designed to provide private and encrypted digital communication.",
+    "App Version":
+      "You are currently using Qumail Application version 2.4.1.",
+    "Privacy Policy":
+      "Qumail protects your communication using encryption and secure authentication mechanisms. Your email data is handled securely within the application.",
+    "Terms of Service":
+      "By using Qumail, you agree to use the application responsibly and only for lawful communication.",
+    "Contact Support":
+      "For queries, technical issues, or assistance, please contact admin123@qumail.io.",
+    "Developer Information":
+      "Qumail is a quantum-secure email communication project developed with a focus on secure and privacy-preserving digital communication.",
+  };
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#FAF3E7" }}>
@@ -513,14 +529,74 @@ export default function Settings() {
             <div className="px-5 py-3">
               {infoItems.map((item, idx) => (
                 <div key={item.label}>
-                  <button className="w-full flex items-center gap-3 py-3.5 transition-all duration-150 hover:opacity-75 text-left">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "rgba(184,155,94,0.08)", color: accent }}>
+                  <button
+                    onClick={() =>
+                      setActiveInfo(
+                        activeInfo === item.label ? null : item.label
+                      )
+                    }
+                    className="w-full flex items-center gap-3 py-3.5 transition-all duration-150 hover:opacity-75 text-left"
+                  >
+                    <div
+                      className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                      style={{
+                        background: "rgba(184,155,94,0.08)",
+                        color: accent,
+                      }}
+                    >
                       {item.icon}
                     </div>
-                    <span style={{ flex: 1, fontSize: "0.88rem", fontWeight: 500, color: txtPrimary }}>{item.label}</span>
-                    {item.meta && <span style={{ fontSize: "0.72rem", color: txtSecondary, fontFamily: "JetBrains Mono, monospace" }}>{item.meta}</span>}
-                    <ChevronRight size={15} style={{ color: txtSecondary, flexShrink: 0 }} />
+                    <span
+                      style={{
+                        flex: 1,
+                        fontSize: "0.88rem",
+                        fontWeight: 500,
+                        color: txtPrimary,
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                    {item.meta && (
+                      <span
+                        style={{
+                          fontSize: "0.72rem",
+                          color: txtSecondary,
+                          fontFamily: "JetBrains Mono, monospace",
+                        }}
+                      >
+                        {item.meta}
+                      </span>
+                    )}
+                    <ChevronRight
+                      size={15}
+                      style={{
+                        color: txtSecondary,
+                        flexShrink: 0,
+                        transform:
+                          activeInfo === item.label
+                            ? "rotate(90deg)"
+                            : "rotate(0deg)",
+                        transition: "transform 0.2s ease",
+                      }}
+                    />
                   </button>
+
+                  {activeInfo === item.label && (
+                    <div
+                      className="mx-2 mb-3 px-4 py-3 rounded-xl"
+                      style={{
+                        background: "rgba(184,155,94,0.07)",
+                        border: "1px solid rgba(184,155,94,0.18)",
+                        color: txtSecondary,
+                        fontSize: "0.75rem",
+                        lineHeight: 1.6,
+                        fontFamily: "JetBrains Mono, monospace",
+                      }}
+                    >
+                      {informationData[item.label]}
+                    </div>
+                  )}
+
                   {idx < infoItems.length - 1 && <RowDivider />}
                 </div>
               ))}

@@ -1,20 +1,14 @@
 import { useState, useEffect } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useLocation } from "react-router";
 import {
   Send, FileText, Trash2, AlertOctagon, Star, Edit,
-  Bell, Settings as SettingsIcon, Inbox, Reply, Forward,
-  Archive, MoreVertical, Download, Paperclip, Shield,
+  Inbox, Reply, Forward,
+  Download, Paperclip, Shield,
   Lock, CheckCircle, ArrowLeft, FileIcon,
 } from "lucide-react";
 import { ProfileDropdown } from "../components/ProfileDropdown";
 
 type MailFolder = "inbox" | "sent" | "drafts" | "trash" | "spam" | "starred";
-
-const navBtn = {
-  background: "rgba(184,155,94,0.12)",
-  border: "1px solid rgba(184,155,94,0.28)",
-  color: "#B89B5E",
-} as React.CSSProperties;
 
 const warmCard = {
   background: "#FFFDF9",
@@ -30,10 +24,19 @@ const goldBtn = {
 
 export default function ReadEmail() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams();
-  const [activeFolder, setActiveFolder] = useState<MailFolder>("inbox");
+
+  const draft = location.state?.draft;
+
+  const trashMailType = location.state?.mailType;
+  const trashSender = location.state?.sender;
+  const trashRecipient = location.state?.recipient;
+
+  const [activeFolder, setActiveFolder] = useState<MailFolder>(location.state?.folder || "inbox");
   const [isStarred, setIsStarred] = useState(false);
   const [showNotification, setShowNotification] = useState(false);
+  const [showSectionMessage, setShowSectionMessage] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showForwardDialog, setShowForwardDialog] = useState(false);
   const [forwardSearch, setForwardSearch] = useState("");
@@ -47,8 +50,12 @@ export default function ReadEmail() {
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [decryptProgress, setDecryptProgress] = useState(0);
   const [otpVerified, setOtpVerified] = useState(false);
-  const [mailData, setMailData] = useState<any>(null);
+  const [mailData, setMailData] = useState<any>(draft || null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedMessage, setEditedMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const [replyMessage, setReplyMessage] = useState("");
+  const [notificationMessage, setNotificationMessage] = useState("");
   const [replyAttachment, setReplyAttachment] = useState<File | null>(null);
 
   useEffect(() => {
@@ -61,6 +68,14 @@ export default function ReadEmail() {
   }, [countdown]);
 
   useEffect(() => {
+    // Drafts are already available locally and do not need OTP or decryption.
+    if (draft) {
+      setMailData(draft);
+      setShowOtpDialog(false);
+      setOtpVerified(true);
+      return;
+    }
+
     const sendOtp = async () => {
       try {
         const token = localStorage.getItem("access");
@@ -73,7 +88,13 @@ export default function ReadEmail() {
       }
     };
     sendOtp();
-  }, []);
+  }, [draft, id]);
+
+  useEffect(() => {
+    if (mailData?.message) {
+      setEditedMessage(mailData.message);
+    }
+  }, [mailData]);
 
   const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Backspace" && !otp[index] && index > 0) {
@@ -223,17 +244,161 @@ export default function ReadEmail() {
     }
   };
 
+  const handleRestoreMail = async () => {
+  try {
+    const token = localStorage.getItem("access");
+
+    const response = await fetch(
+      `http://127.0.0.1:8000/restore-mail/${Number(id)}/`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    if (response.ok) {
+      setNotificationMessage("Email Restored Successfully");
+      setShowNotification(true);
+
+      setTimeout(() => {
+        setShowNotification(false);
+        navigate("/dashboard");
+      }, 1500);
+    } else {
+      alert(data.error || "Failed to restore email.");
+    }
+  } catch (error) {
+    console.error("RESTORE ERROR:", error);
+  }
+};
+
+
+const handlePermanentDelete = async () => {
+  try {
+    const token = localStorage.getItem("access");
+
+    const response = await fetch(
+      `http://127.0.0.1:8000/delete-permanently/${Number(id)}/`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    if (response.ok) {
+      setNotificationMessage("Email Deleted Permanently");
+      setShowNotification(true);
+
+      setTimeout(() => {
+        setShowNotification(false);
+        navigate("/dashboard");
+      }, 1500);
+    } else {
+      alert(data.error || "Failed to permanently delete email.");
+    }
+  } catch (error) {
+    console.error("PERMANENT DELETE ERROR:", error);
+  }
+};
+
+  const handleSendDraft = async () => {
+    try {
+      const token = localStorage.getItem("access");
+
+      const response = await fetch(
+        `http://127.0.0.1:8000/send-draft/${mailData?.id}/`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.error || "Failed to send draft");
+        return;
+      }
+
+      setShowNotification(true);
+
+      setTimeout(() => {
+        setShowNotification(false);
+
+        navigate("/dashboard", {
+          state: {
+            folder: "sent",
+          },
+        });
+      }, 1800);
+    } catch (error) {
+      console.error("SEND DRAFT ERROR:", error);
+      alert("Server error while sending draft");
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    try {
+      setIsSaving(true);
+
+      const token = localStorage.getItem("access");
+      const response = await fetch(
+        `http://127.0.0.1:8000/edit/${mailData?.id || id}/`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            subject: mailData?.subject,
+            message: editedMessage,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.error || "Unable to update mail");
+        return;
+      }
+
+      setMailData({
+        ...mailData,
+        message: editedMessage,
+      });
+
+      setIsEditing(false);
+    } catch (error) {
+      console.error("EDIT MAIL ERROR:", error);
+      alert("Server error");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const filteredUsers = users.filter((u) =>
     u.username.toLowerCase().includes(forwardSearch.toLowerCase())
   );
 
   const folders = [
-    { id: "inbox" as MailFolder, label: "Inbox", icon: Inbox, count: 12 },
-    { id: "sent" as MailFolder, label: "Sent", icon: Send, count: null },
-    { id: "drafts" as MailFolder, label: "Drafts", icon: FileText, count: 3 },
-    { id: "starred" as MailFolder, label: "Starred", icon: Star, count: null },
-    { id: "spam" as MailFolder, label: "Spam", icon: AlertOctagon, count: 2 },
-    { id: "trash" as MailFolder, label: "Trash", icon: Trash2, count: null },
+    { id: "inbox" as MailFolder, label: "Inbox", icon: Inbox },
+    { id: "sent" as MailFolder, label: "Sent", icon: Send },
+    { id: "drafts" as MailFolder, label: "Drafts", icon: FileText },
+    { id: "starred" as MailFolder, label: "Starred", icon: Star },
+    { id: "spam" as MailFolder, label: "Spam", icon: AlertOctagon },
+    { id: "trash" as MailFolder, label: "Trash", icon: Trash2 },
   ];
 
   return (
@@ -263,9 +428,7 @@ export default function ReadEmail() {
           </span>
         </div>
 
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <button className="w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105" style={navBtn}><Bell className="w-4 h-4" /></button>
-          <button onClick={() => navigate("/settings")} className="w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-105" style={navBtn}><SettingsIcon className="w-4 h-4" /></button>
+        <div className="flex items-center flex-shrink-0">
           <ProfileDropdown isDark={false} />
         </div>
       </nav>
@@ -292,7 +455,18 @@ export default function ReadEmail() {
               return (
                 <button
                   key={folder.id}
-                  onClick={() => { setActiveFolder(folder.id); if (folder.id === "inbox") navigate("/dashboard"); }}
+                  onClick={() => {
+                    if (folder.id === "inbox") {
+                      setActiveFolder("inbox");
+                      navigate("/dashboard");
+                    } else {
+                      setShowSectionMessage(true);
+
+                      setTimeout(() => {
+                        setShowSectionMessage(false);
+                      }, 2500);
+                    }
+                  }}
                   className="w-full px-4 py-2.5 rounded-lg flex items-center gap-3 transition-all duration-200"
                   style={{
                     background: isActive ? "rgba(184,155,94,0.14)" : "transparent",
@@ -303,11 +477,6 @@ export default function ReadEmail() {
                 >
                   <Icon className="w-4 h-4" />
                   <span className="flex-1 text-left text-sm font-medium">{folder.label}</span>
-                  {folder.count !== null && (
-                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(184,155,94,0.15)", color: "#B89B5E", fontFamily: "JetBrains Mono, monospace" }}>
-                      {folder.count}
-                    </span>
-                  )}
                 </button>
               );
             })}
@@ -324,7 +493,7 @@ export default function ReadEmail() {
               className="flex items-center gap-2 mb-6 text-sm transition-all duration-200 hover:gap-3"
               style={{ color: "#B89B5E", fontFamily: "JetBrains Mono, monospace" }}
             >
-              <ArrowLeft className="w-4 h-4" />Back to Inbox
+              <ArrowLeft className="w-4 h-4" />Back to Dashboard
             </button>
 
             {/* Email Card */}
@@ -343,8 +512,71 @@ export default function ReadEmail() {
                     </div>
                     <div>
                       <h3 className="font-semibold text-base mb-1" style={{ color: "#3B2A23" }}>{mailData?.username}</h3>
-                      <p className="text-sm mb-1" style={{ color: "#7A6D63" }}>From: {mailData?.sender}</p>
-                      <p className="text-xs" style={{ color: "#A89B91" }}>To: You</p>
+                      {draft ? (
+                        <>
+                          <p
+                            className="text-sm mb-1"
+                            style={{ color: "#7A6D63" }}
+                          >
+                            From: {mailData?.sender || "Draft"}
+                          </p>
+
+                          <p
+                            className="text-xs"
+                            style={{ color: "#A89B91" }}
+                          >
+                            To: {mailData?.recipient || mailData?.receiver || mailData?.to || "Not specified"}
+                          </p>
+                        </>
+                      ) : activeFolder === "trash" ? (
+                        <>
+                          <p
+                            className="text-sm mb-1"
+                            style={{ color: "#7A6D63" }}
+                          >
+                            From: {mailData?.sender || "Unknown"}
+                          </p>
+
+                          <p
+                            className="text-xs"
+                            style={{ color: "#A89B91" }}
+                          >
+                            To: {mailData?.recipient || mailData?.receiver || "Unknown"}
+                          </p>
+                        </>
+                      ) : activeFolder === "sent" ? (
+                        <>
+                          <p
+                            className="text-sm mb-1"
+                            style={{ color: "#7A6D63" }}
+                          >
+                            From: {mailData?.sender}
+                          </p>
+
+                          <p
+                            className="text-xs"
+                            style={{ color: "#A89B91" }}
+                          >
+                            To: {mailData?.recipient || mailData?.receiver || mailData?.receivers}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p
+                            className="text-sm mb-1"
+                            style={{ color: "#7A6D63" }}
+                          >
+                            From: {mailData?.sender}
+                          </p>
+
+                          <p
+                            className="text-xs"
+                            style={{ color: "#A89B91" }}
+                          >
+                            To: You
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">
@@ -372,46 +604,163 @@ export default function ReadEmail() {
 
               {/* Action Toolbar */}
               <div className="px-8 py-4 flex items-center gap-2" style={{ background: "rgba(184,155,94,0.025)", borderBottom: "1px solid #E6DDD2" }}>
-                <button onClick={handleReplyScroll} className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105" style={goldBtn}>
-                  <Reply className="w-4 h-4" />Reply
-                </button>
-                <button
-                  onClick={() => { setShowForwardDialog(true); setForwardSearch(""); setSelectedRecipients([]); fetchUsers(); }}
-                  className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105" style={goldBtn}
-                >
-                  <Forward className="w-4 h-4" />Forward
-                </button>
-                {!mailData?.is_read && (
-                  <button className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105" style={{ background: "rgba(255,170,0,0.08)", border: "1px solid rgba(255,170,0,0.22)", color: "#ff8800" }}>
-                    <Edit className="w-4 h-4" />Edit
-                  </button>
+                {activeFolder === "trash" ? (
+                  <>
+                    <button
+                      onClick={handleRestoreMail}
+                      className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium"
+                      style={goldBtn}
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      Restore
+                    </button>
+
+                    <button
+                      onClick={handlePermanentDelete}
+                      className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium"
+                      style={{
+                        background: "rgba(204,0,0,0.08)",
+                        border: "1px solid rgba(204,0,0,0.2)",
+                        color: "#cc0000",
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete Permanently
+                    </button>
+                  </>
+                ) : draft ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        setEditedMessage(mailData?.message || "");
+                        setIsEditing(true);
+                      }}
+                      className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium"
+                      style={goldBtn}
+                    >
+                      <Edit className="w-4 h-4" />
+                      Edit
+                    </button>
+
+                    <button
+                      onClick={() => setShowDeleteDialog(true)}
+                      className="p-2 rounded-lg"
+                      style={{
+                        background: "rgba(204,0,0,0.08)",
+                        border: "1px solid rgba(204,0,0,0.2)",
+                        color: "#cc0000",
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={handleReplyScroll} className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105" style={goldBtn}>
+                      <Reply className="w-4 h-4" />Reply
+                    </button>
+                    <button
+                      onClick={() => { setShowForwardDialog(true); setForwardSearch(""); setSelectedRecipients([]); fetchUsers(); }}
+                      className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105" style={goldBtn}
+                    >
+                      <Forward className="w-4 h-4" />Forward
+                    </button>
+                    {!mailData?.is_read && (
+                      <button
+                        onClick={() => {
+                          setEditedMessage(mailData?.message || "");
+                          setIsEditing(true);
+                        }}
+                        className="px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105"
+                        style={{ background: "rgba(255,170,0,0.08)", border: "1px solid rgba(255,170,0,0.22)", color: "#ff8800" }}
+                      >
+                        <Edit className="w-4 h-4" />Edit
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setIsStarred(!isStarred)}
+                      className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
+                      style={{
+                        background: isStarred ? "rgba(184,155,94,0.15)" : "rgba(184,155,94,0.08)",
+                        border: isStarred ? "1px solid rgba(184,155,94,0.4)" : "1px solid rgba(184,155,94,0.2)",
+                        color: isStarred ? "#B89B5E" : "#A89B91",
+                        boxShadow: isStarred ? "0 0 20px rgba(184,155,94,0.25)" : "none",
+                      }}
+                    >
+                      <Star className="w-4 h-4" fill={isStarred ? "currentColor" : "none"} />
+                    </button>
+                    <button onClick={() => setShowDeleteDialog(true)} className="p-2 rounded-lg transition-all duration-200 hover:scale-105" style={{ background: "rgba(204,0,0,0.08)", border: "1px solid rgba(204,0,0,0.2)", color: "#cc0000" }}>
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={() => setIsStarred(!isStarred)}
-                  className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
-                  style={{
-                    background: isStarred ? "rgba(184,155,94,0.15)" : "rgba(184,155,94,0.08)",
-                    border: isStarred ? "1px solid rgba(184,155,94,0.4)" : "1px solid rgba(184,155,94,0.2)",
-                    color: isStarred ? "#B89B5E" : "#A89B91",
-                    boxShadow: isStarred ? "0 0 20px rgba(184,155,94,0.25)" : "none",
-                  }}
-                >
-                  <Star className="w-4 h-4" fill={isStarred ? "currentColor" : "none"} />
-                </button>
-                <button className="p-2 rounded-lg transition-all duration-200 hover:scale-105" style={goldBtn}><Archive className="w-4 h-4" /></button>
-                <button onClick={() => setShowDeleteDialog(true)} className="p-2 rounded-lg transition-all duration-200 hover:scale-105" style={{ background: "rgba(204,0,0,0.08)", border: "1px solid rgba(204,0,0,0.2)", color: "#cc0000" }}>
-                  <Trash2 className="w-4 h-4" />
-                </button>
-                <div className="flex-1" />
-                <button className="p-2 rounded-lg transition-all duration-200 hover:scale-105" style={goldBtn}><MoreVertical className="w-4 h-4" /></button>
               </div>
 
               {/* Email Body */}
               <div className="p-8">
                 <div style={{ color: "#3B2A23", lineHeight: "1.75", fontSize: "0.95rem" }}>
-                  {(mailData?.message || "").split("\n").map((paragraph: string, idx: number) => (
-                    <p key={idx} className="mb-4" style={{ color: "#6E625A" }}>{paragraph}</p>
-                  ))}
+                  {isEditing ? (
+                    <div className="space-y-4">
+
+                      <textarea
+                        value={editedMessage}
+                        onChange={(e) =>
+                          setEditedMessage(e.target.value)
+                        }
+                        className="w-full min-h-[300px] rounded-xl p-5 resize-y outline-none"
+                        style={{
+                          border: "1px solid #D8C7A5",
+                          background: "#FFFCF7",
+                          color: "#3B2A23",
+                          fontSize: "16px",
+                          lineHeight: "1.7",
+                        }}
+                      />
+
+                      <div className="flex gap-3">
+
+                        <button
+                          onClick={handleSaveEdit}
+                          disabled={isSaving}
+                          className="px-6 py-3 rounded-xl font-semibold"
+                          style={{
+                            background: "#B89B5E",
+                            color: "#FFFFFF",
+                          }}
+                        >
+                          {isSaving ? "Saving..." : "Save"}
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setEditedMessage(mailData?.message || "");
+                            setIsEditing(false);
+                          }}
+                          className="px-6 py-3 rounded-xl"
+                          style={{
+                            border: "1px solid #D8C7A5",
+                            background: "#FFFFFF",
+                            color: "#7A6D63",
+                          }}
+                        >
+                          Cancel
+                        </button>
+
+                      </div>
+
+                    </div>
+                  ) : (
+                    <p
+                      className="whitespace-pre-wrap"
+                      style={{
+                        color: "#7A6D63",
+                        fontSize: "16px",
+                        lineHeight: "1.7",
+                      }}
+                    >
+                      {mailData?.message}
+                    </p>
+                  )}
                   {mailData?.attachment && (
                     <div className="mt-6">
                       <button
@@ -478,53 +827,153 @@ export default function ReadEmail() {
               )}
             </div>
 
-            {/* Reply Section */}
-            <div id="reply-section" className="rounded-2xl overflow-hidden" style={warmCard}>
-              <div className="p-6">
-                <h3 className="text-sm font-semibold mb-4 uppercase tracking-wider" style={{ color: "#A89B91", fontFamily: "JetBrains Mono, monospace" }}>Reply</h3>
-                <textarea
-                  value={replyMessage}
-                  onChange={(e) => setReplyMessage(e.target.value)}
-                  placeholder="Type your reply..."
-                  rows={6}
-                  className="w-full rounded-xl p-4 text-sm mb-4 resize-none transition-all duration-200"
-                  style={{ background: "#FFFDF9", border: "1px solid #DCCFC0", color: "#3B2A23", outline: "none" }}
-                  onFocus={e => (e.currentTarget.style.borderColor = "#B89B5E")}
-                  onBlur={e => (e.currentTarget.style.borderColor = "#DCCFC0")}
-                />
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={handleSendReply}
-                    className="px-6 py-2.5 rounded-xl font-semibold tracking-wide uppercase transition-all duration-200 active:scale-[0.98] hover:scale-[1.02] flex items-center gap-2"
-                    style={{ background: "#B89B5E", color: "#FAF3E7", boxShadow: "0 4px 22px rgba(184,155,94,0.35)", fontFamily: "Orbitron, sans-serif", fontSize: "0.7rem", letterSpacing: "0.15em" }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "#A6874E")}
-                    onMouseLeave={e => (e.currentTarget.style.background = "#B89B5E")}
+            {/* Reply / Draft Action Section */}
+            {!draft && activeFolder !== "trash" && activeFolder !== "sent" ? (
+              <div id="reply-section" className="rounded-2xl overflow-hidden" style={warmCard}>
+                <div className="p-6">
+                  <h3
+                    className="text-sm font-semibold mb-4 uppercase tracking-wider"
+                    style={{
+                      color: "#A89B91",
+                      fontFamily: "JetBrains Mono, monospace",
+                    }}
                   >
-                    <Send className="w-4 h-4" />Send Reply
-                  </button>
-                  <label className="px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105 cursor-pointer" style={goldBtn}>
-                    <Paperclip className="w-4 h-4" />
-                    {replyAttachment ? replyAttachment.name : "Attach"}
-                    <input type="file" hidden onChange={(e) => { if (e.target.files?.[0]) setReplyAttachment(e.target.files[0]); }} />
-                  </label>
-                  <div className="flex-1" />
-                  <div className="flex items-center gap-2">
-                    <Lock className="w-3.5 h-3.5" style={{ color: "#B89B5E" }} />
-                    <span className="text-xs" style={{ color: "#B89B5E", fontFamily: "JetBrains Mono, monospace" }}>Quantum Encryption Enabled</span>
+                    Reply
+                  </h3>
+
+                  <textarea
+                    value={replyMessage}
+                    onChange={(e) => setReplyMessage(e.target.value)}
+                    placeholder="Type your reply..."
+                    rows={6}
+                    className="w-full rounded-xl p-4 text-sm mb-4 resize-none transition-all duration-200"
+                    style={{
+                      background: "#FFFDF9",
+                      border: "1px solid #DCCFC0",
+                      color: "#3B2A23",
+                      outline: "none",
+                    }}
+                    onFocus={e => (e.currentTarget.style.borderColor = "#B89B5E")}
+                    onBlur={e => (e.currentTarget.style.borderColor = "#DCCFC0")}
+                  />
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleSendReply}
+                      className="px-6 py-2.5 rounded-xl font-semibold tracking-wide uppercase transition-all duration-200 active:scale-[0.98] hover:scale-[1.02] flex items-center gap-2"
+                      style={{
+                        background: "#B89B5E",
+                        color: "#FAF3E7",
+                        boxShadow: "0 4px 22px rgba(184,155,94,0.35)",
+                        fontFamily: "Orbitron, sans-serif",
+                        fontSize: "0.7rem",
+                        letterSpacing: "0.15em",
+                      }}
+                    >
+                      <Send className="w-4 h-4" />
+                      Send Reply
+                    </button>
+
+                    <label
+                      className="px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105 cursor-pointer"
+                      style={goldBtn}
+                    >
+                      <Paperclip className="w-4 h-4" />
+                      {replyAttachment ? replyAttachment.name : "Attach"}
+
+                      <input
+                        type="file"
+                        hidden
+                        onChange={(e) => {
+                          if (e.target.files?.[0]) {
+                            setReplyAttachment(e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+
+                    <div className="flex-1" />
+
+                    <div className="flex items-center gap-2">
+                      <Lock className="w-3.5 h-3.5" style={{ color: "#B89B5E" }} />
+                      <span
+                        className="text-xs"
+                        style={{
+                          color: "#B89B5E",
+                          fontFamily: "JetBrains Mono, monospace",
+                        }}
+                      >
+                        Quantum Encryption Enabled
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            ) : draft ? (
+              <div className="rounded-2xl overflow-hidden" style={warmCard}>
+                <div className="p-6">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleSendDraft}
+                      className="px-6 py-2.5 rounded-xl font-semibold tracking-wide uppercase transition-all duration-200 active:scale-[0.98] hover:scale-[1.02] flex items-center gap-2"
+                      style={{
+                        background: "#B89B5E",
+                        color: "#FAF3E7",
+                        boxShadow: "0 4px 22px rgba(184,155,94,0.35)",
+                        fontFamily: "Orbitron, sans-serif",
+                        fontSize: "0.7rem",
+                        letterSpacing: "0.15em",
+                      }}
+                    >
+                      <Send className="w-4 h-4" />
+                      Send
+                    </button>
+
+                    <label
+                      className="px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition-all duration-200 hover:scale-105 cursor-pointer"
+                      style={goldBtn}
+                    >
+                      <Paperclip className="w-4 h-4" />
+                      {replyAttachment ? replyAttachment.name : "Attach"}
+
+                      <input
+                        type="file"
+                        hidden
+                        onChange={(e) => {
+                          if (e.target.files?.[0]) {
+                            setReplyAttachment(e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {/* Notifications */}
             {showNotification && (
               <div className="fixed top-6 right-6 z-50 px-6 py-4 rounded-2xl shadow-2xl" style={{ background: "rgba(184,155,94,0.12)", border: "1px solid rgba(184,155,94,0.4)", color: "#B89B5E", fontFamily: "Orbitron, sans-serif" }}>
-                Reply Sent Successfully
+                {notificationMessage}
               </div>
             )}
             {showForwardNotification && (
               <div className="fixed top-6 right-6 z-50 px-6 py-4 rounded-2xl shadow-2xl" style={{ background: "rgba(184,155,94,0.12)", border: "1px solid rgba(184,155,94,0.4)", color: "#B89B5E", fontFamily: "Orbitron, sans-serif" }}>
                 Email Forwarded Successfully
+              </div>
+            )}
+            {showSectionMessage && (
+              <div
+                className="fixed top-6 right-6 z-50 px-5 py-3 rounded-xl shadow-xl"
+                style={{
+                  background: "#FFFDF9",
+                  border: "1px solid rgba(184,155,94,0.4)",
+                  color: "#7A6D63",
+                  fontFamily: "JetBrains Mono, monospace",
+                  fontSize: "0.75rem",
+                }}
+              >
+                Go back to main dashboard and continue with another section.
               </div>
             )}
           </div>

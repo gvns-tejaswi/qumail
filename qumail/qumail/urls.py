@@ -20,9 +20,9 @@ from django.urls import path
 from emailapp.views import forgot_password, get_starred_mails, get_users, register, login, reply_all, reset_password, save_draft, search_mails,send_mail,inbox,decrypt_mail, send_otp, toggle_star, verify_forgot_otp 
 from emailapp.views import reply_mail,get_drafts,get_sent_mails,get_trash_mails
 from emailapp.views import forward_mail,update_phone,profile,change_password,activity_statistics
-from emailapp.views import delete_mail, trash, restore_mail,delete_account
+from emailapp.views import delete_mail, restore_mail,delete_account
 from emailapp.views import edit_mail,logout_user, login_history
-from emailapp.views import verify_otp,mail_counts
+from emailapp.views import verify_otp,mail_counts,send_draft
 from emailapp.views import star_mail
 from django.conf import settings
 from django.conf.urls.static import static
@@ -39,7 +39,6 @@ urlpatterns = [
     path('reply/', reply_mail),
     path('forward/', forward_mail),
     path('delete-mail/<int:mail_id>/', delete_mail),
-    path('trash/', trash),
     path('trash-mail/', get_trash_mails),
     path('edit/<int:mail_id>/', edit_mail),
     path('send-otp/<int:mail_id>/', send_otp),
@@ -91,6 +90,9 @@ path("change-password/", change_password),
 path("activity-statistics/", activity_statistics),
 path("delete-account/", delete_account),
 path("mail-counts/", mail_counts),
+path(
+    "send-draft/<int:mail_id>/",send_draft
+),
 ]
 
 urlpatterns += static(

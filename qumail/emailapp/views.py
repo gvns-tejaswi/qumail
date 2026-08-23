@@ -1,4 +1,5 @@
 import re
+from unicodedata import name
 from django.contrib.auth.models import User
 from django.db.models import Q
 from requests import request
@@ -6,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from django.http import HttpResponse
 from channels.layers import get_channel_layer
-
+import os
 from asgiref.sync import async_to_sync
 
 from .models import LoginActivity, UserProfile
@@ -17,109 +18,171 @@ import random
 import boto3
 
 
+import re
+
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+from django.contrib.auth.models import User
+
+from .models import UserProfile
+
+
 @api_view(['POST'])
 def register(request):
 
-    name = request.data.get('name')
+    name = request.data.get('name', '').strip()
+    email = request.data.get('email', '').strip()
+    password = request.data.get('password', '')
+    confirm_password = request.data.get('confirm_password', '')
+    phone_number = request.data.get('phone_number', '').strip()
+    errors = {}
+    if not name:
+        errors["name"] = "Required"
+    else:
+        # First check characters
+        if not re.fullmatch(r"[A-Za-z ]+", name):
+            errors["name"] = (
+                "Name must contain only alphabets"
+            )
+        # Only check length if characters are valid
+        elif len(name) > 20:
+            errors["name"] = (
+                "Name must not exceed 20 characters"
+            )
+    if not email:
+        errors["email"] = "Required"
+    elif not email.lower().endswith("@qumail.io"):
+        errors["email"] = (
+            "Email must end with '@qumail.io'"
+        )
+    if not phone_number:
+        errors["phone_number"] = "Required"
+    elif not phone_number.isdigit():
+        errors["phone_number"] = (
+            "Phone number must contain only digits"
+        )
+    elif len(phone_number) != 10:
+        errors["phone_number"] = (
+            "Phone number must contain exactly 10 digits"
+        )
+    if not password:
+        errors["password"] = "Required"
+    else:
+        password_requirements = {
+            "min_length": len(password) >= 8,
+            "uppercase": bool(
+                re.search(r"[A-Z]", password)
+            ),
+            "lowercase": bool(
+                re.search(r"[a-z]", password)
+            ),
+            "number": bool(
+                re.search(r"[0-9]", password)
+            ),
+            "special": bool(
+                re.search(
+                    r'[!@#$%^&*(),.?":{}|<>]',
+                    password
+                )
+            ),
+            "no_name_or_email": (
+                name.lower() not in password.lower()
+                and
+                email.lower() not in password.lower()
+            )
+        }
+        if not all(password_requirements.values()):
+            errors["password"] = (
+                "Password requirements not satisfied"
+            )
 
-    email = request.data.get('email')
 
-    password = request.data.get('password')
+    # =========================================================
+    # CONFIRM PASSWORD
+    # =========================================================
 
-    confirm_password = request.data.get(
-        "confirm_password"
-    )
+    if not confirm_password:
 
-    phone_number = request.data.get('phone_number')
+        errors["confirm_password"] = "Required"
 
+    elif password != confirm_password:
 
-    # 🔴 Check empty
-    #if not name or not email or not password or not phone_number:
-    if not name or not email or not password or not confirm_password or not phone_number:
-
-        return Response({
-            "error": "All fields required"
-        }, status=400)
+        errors["confirm_password"] = (
+            "Passwords do not match"
+        )
 
 
-    # 🔴 Password match
-    if password != confirm_password:
+    # =========================================================
+    # EMAIL ALREADY EXISTS
+    # =========================================================
 
-        return Response({
-            "error": "Passwords do not match"
-        }, status=400)
+    if email:
+
+        if User.objects.filter(username=email).exists():
+
+            errors["email"] = (
+                "Email already exists. Try another email."
+            )
 
 
-    # 🔴 Email validation
-    if not email.lower().endswith("@qumail.io"):
+    # =========================================================
+    # RETURN ALL ERRORS TOGETHER
+    # =========================================================
+
+    if errors:
+
+        response_data = {
+            "errors": errors
+        }
+
+
+        # If password was entered, also return
+        # individual password requirement status
+
+        if password:
+
+            response_data["password_requirements"] = {
+
+                "min_length":
+                    len(password) >= 8,
+
+                "uppercase":
+                    bool(re.search(r"[A-Z]", password)),
+
+                "lowercase":
+                    bool(re.search(r"[a-z]", password)),
+
+                "number":
+                    bool(re.search(r"[0-9]", password)),
+
+                "special":
+                    bool(
+                        re.search(
+                            r'[!@#$%^&*(),.?":{}|<>]',
+                            password
+                        )
+                    ),
+
+                "no_name_or_email":
+                    (
+                        name.lower() not in password.lower()
+                        and
+                        email.lower() not in password.lower()
+                    )
+            }
+
+
         return Response(
-            {
-                "error": "Email must end with '@qumail.io'"
-            },
+            response_data,
             status=400
         )
 
-    # 🔴 Phone validation
-    if len(phone_number) != 10:
 
-        return Response({
-            "error": "Phone number must be 10 digits"
-        }, status=400)
+    # =========================================================
+    # CREATE USER
+    # =========================================================
 
-
-    # 🔴 Password rules
-    if len(password) < 8:
-
-        return Response({
-            "error": "Password must contain at least 8 characters"
-        }, status=400)
-
-
-    if not re.search(r"[A-Z]", password):
-
-        return Response({
-            "error": "Password must contain uppercase letter"
-        }, status=400)
-
-
-    if not re.search(r"[a-z]", password):
-
-        return Response({
-            "error": "Password must contain lowercase letter"
-        }, status=400)
-
-
-    if not re.search(r"[0-9]", password):
-
-        return Response({
-            "error": "Password must contain number"
-        }, status=400)
-
-
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-
-        return Response({
-            "error": "Password must contain special character"
-        }, status=400)
-
-
-    # 🔴 Password similarity
-    if name.lower() in password.lower() or email.lower() in password.lower():
-
-        return Response({
-            "error": "Password should not contain name or email"
-        }, status=400)
-
-
-    # 🔴 User exists
-    if User.objects.filter(username=email).exists():
-
-        return Response({
-            "error": "Email already exists. Try another email."
-        }, status=400)
-
-
-    # ✅ Create user
     user = User.objects.create_user(
 
         username=email,
@@ -132,7 +195,10 @@ def register(request):
     )
 
 
-    # ✅ Save phone number
+    # =========================================================
+    # SAVE PHONE NUMBER
+    # =========================================================
+
     UserProfile.objects.create(
 
         user=user,
@@ -141,62 +207,150 @@ def register(request):
     )
 
 
+    # =========================================================
+    # SUCCESS
+    # =========================================================
+
     return Response({
-        "message": "User registered successfully"
-    })
+
+        "message":
+            "User registered successfully"
+
+    }, status=201)
 
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 
 @api_view(['POST'])
 def login(request):
-    username = request.data.get('username')  # email
-    password = request.data.get('password')
+
+    # =========================================================
+    # GET LOGIN DATA
+    # =========================================================
+
+    email = request.data.get('username', '').strip()
+    password = request.data.get('password', '')
 
     ip = request.META.get('REMOTE_ADDR')
+
     device = request.META.get(
         'HTTP_USER_AGENT',
         'Unknown Device'
     )
 
+
+    # =========================================================
+    # EMPTY FIELD VALIDATION
+    # =========================================================
+
+    # BOTH EMPTY
+    if not email and not password:
+        return Response({
+            "errors": {
+                "email": "Enter your email",
+                "password": "Enter your password"
+            }
+        }, status=400)
+
+
+    # EMAIL EMPTY
+    if not email:
+        return Response({
+            "errors": {
+                "email": "Enter your email"
+            }
+        }, status=400)
+
+
+    # PASSWORD EMPTY
+    if not password:
+        return Response({
+            "errors": {
+                "password": "Enter your password"
+            }
+        }, status=400)
+
+
+    # =========================================================
+    # FIND USER USING EMAIL
+    # =========================================================
+
     try:
-        existing_user = User.objects.get(username=username)
+        existing_user = User.objects.get(
+            username=email
+        )
+
     except User.DoesNotExist:
         existing_user = None
 
-    if existing_user and not existing_user.is_active:
-        return Response(
-            {
-                "error": "This account has been deleted."
-            },
-            status=403
+
+    # =========================================================
+    # INVALID EMAIL
+    # =========================================================
+
+    if existing_user is None:
+        return Response({
+            "error_type": "email",
+            "error": "Invalid email ID"
+        }, status=401)
+
+
+    # =========================================================
+    # CHECK DELETED ACCOUNT
+    # =========================================================
+
+    if not existing_user.is_active:
+        return Response({
+            "error": "This account has been deleted."
+        }, status=403)
+
+
+    # =========================================================
+    # CHECK PASSWORD
+    # =========================================================
+
+    password_valid = existing_user.check_password(
+        password
+    )
+
+
+    # =========================================================
+    # INVALID PASSWORD
+    # =========================================================
+
+    if not password_valid:
+
+        LoginActivity.objects.create(
+            user=existing_user,
+            ip_address=ip,
+            device=device,
+            status="FAILED",
+            is_active=False
         )
 
-    user = authenticate(username=username, password=password)
+        return Response({
+            "error_type": "password",
+            "error": "Invalid password"
+        }, status=401)
 
-    if user is None:
-        if existing_user:
-            LoginActivity.objects.create(
-                user=existing_user,
-                ip_address=ip,
-                device=device,
-                status="FAILED",
-                is_active=False
-            )
-        return Response({"error": "Invalid credentials"}, status=401)
+
+    # =========================================================
+    # LOGIN SUCCESS
+    # =========================================================
+
+    user = existing_user
+
+
+    # =========================================================
+    # CREATE JWT TOKENS
+    # =========================================================
 
     refresh = RefreshToken.for_user(user)
 
-    sns_client = boto3.client(
 
-    "sns",
-
-    region_name="us-east-2",
-
-    aws_access_key_id="AKIA525EB66VL3Y5ZOWW",
-
-    aws_secret_access_key="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"
-    )
+    # =========================================================
+    # SAVE LOGIN ACTIVITY
+    # =========================================================
 
     LoginActivity.objects.create(
         user=user,
@@ -206,27 +360,75 @@ def login(request):
         is_active=True
     )
 
-    profile = UserProfile.objects.get(
-    user=user
-)
-    message = (
 
-    "QMail Security Alert:\n"
+    # =========================================================
+    # GET USER PROFILE
+    # =========================================================
 
-    "You have successfully logged into your account."
-)
-    sms_response = sns_client.publish(
+    try:
+        profile = UserProfile.objects.get(
+            user=user
+        )
 
-    PhoneNumber="+91" + profile.phone_number,
+    except UserProfile.DoesNotExist:
 
-    Message=message
-)
-    print("LOGIN SMS RESPONSE:", sms_response)
-    
+        profile = None
+
+
+    # =========================================================
+    # SEND LOGIN SMS
+    # =========================================================
+
+    if profile:
+
+        try:
+
+            sns_client = boto3.client(
+                "sns",
+                region_name="us-east-2",
+                aws_access_key_id="AKIA525EB66VL3Y5ZOWW",
+                aws_secret_access_key="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"
+            )
+
+            message = (
+                "QMail Security Alert:\n"
+                "You have successfully logged into your account."
+            )
+
+            sms_response = sns_client.publish(
+                PhoneNumber="+91" + profile.phone_number,
+                Message=message
+            )
+
+            print(
+                "LOGIN SMS RESPONSE:",
+                sms_response
+            )
+
+        except Exception as e:
+
+            # SMS failure should NOT stop login
+            print(
+                "LOGIN SMS FAILED:",
+                str(e)
+            )
+
+
+    # =========================================================
+    # SUCCESS RESPONSE
+    # =========================================================
+
     return Response({
-        "access": str(refresh.access_token),
-        "refresh": str(refresh)
-    })
+
+        "access": str(
+            refresh.access_token
+        ),
+
+        "refresh": str(
+            refresh
+        )
+
+    }, status=200)
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import permission_classes
@@ -413,8 +615,9 @@ def inbox(request):
 
     emails = Email.objects.filter(
         receiver=user,
-        is_deleted=False
-    ).order_by('-id')
+        is_deleted=False,
+        is_draft=False
+    ).order_by('-created_at')
     data = []
     for mail in emails:
         mail.is_read = True
@@ -445,84 +648,84 @@ def inbox(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def decrypt_mail(request, mail_id):
-
     try:
-
         mail = Email.objects.get(
             id=mail_id
         )
 
+        # Allow only sender or receiver to open the mail
         if (
             mail.receiver != request.user
             and mail.sender != request.user
         ):
-
             return Response({
-
                 "error": "Unauthorized"
-
             }, status=403)
 
     except Email.DoesNotExist:
-
         return Response({
-
             "error": "Mail not found"
-
         }, status=404)
 
+    # =========================================================
+    # DECRYPT MESSAGE
+    # =========================================================
+
     try:
-
         decrypted_text = decrypt_message(
-
             mail.encrypted_message,
-
             mail.iv,
-
             mail.auth_tag,
-
             mail.key
         )
 
     except Exception as e:
-
         return Response({
-
             "error": "Decryption failed",
-
             "details": str(e)
-
         }, status=400)
+
+    # =========================================================
+    # ATTACHMENT
+    # =========================================================
 
     attachment_url = None
 
     if mail.encrypted_attachment:
-
         attachment_url = request.build_absolute_uri(
-
             mail.encrypted_attachment.url
         )
 
+    # =========================================================
+    # RETURN MAIL DETAILS
+    # =========================================================
+
     return Response({
-
+        "id": mail.id,
         "sender": mail.sender.username,
-
+        "recipient": mail.receiver.username,
         "subject": mail.subject,
-
         "message": decrypted_text,
         "attachments": [
-    {
-        "id": mail.id,
-        "name": mail.encrypted_attachment.name.split('/')[-1].replace('.enc', ''),
-        "size": "Secure File",
-        "encrypted": True
-    }
-
-] if mail.encrypted_attachment else [],
-
-        "created_at": mail.created_at.strftime("%d %b %Y, %I:%M %p"),
+            {
+                "id": mail.id,
+                "name": (
+                    mail.encrypted_attachment.name
+                    .split('/')[-1]
+                    .replace('.enc', '')
+                ),
+                "size": "Secure File",
+                "encrypted": True
+            }
+        ] if mail.encrypted_attachment else [],
+        "created_at": mail.created_at.strftime(
+            "%d %b %Y, %I:%M %p"
+        ),
         "is_read": mail.is_read,
-        "username": mail.sender.first_name or mail.sender.username
+        "username": (
+            mail.sender.first_name
+            or mail.sender.username
+        )
     })
 
 
@@ -609,17 +812,14 @@ def forward_mail(request):
     receivers = request.data.get("receivers", [])
     # 🔍 Find original mail
     try:
-
         original_mail = Email.objects.get(
-            id=mail_id,
-            receiver=request.user
-        )
-
+        Q(id=mail_id) &
+        (Q(receiver=request.user) | Q(sender=request.user))
+    )
     except Email.DoesNotExist:
-
         return Response({
-            "error": "Mail not found"
-        }, status=404)
+        "error": "Mail not found"
+    }, status=404)
 
     # 🔐 Encrypt again
     encrypted_data = encrypt_message(
@@ -661,110 +861,187 @@ def forward_mail(request):
 def delete_mail(request, mail_id):
 
     try:
-        mail = Email.objects.get(
-            id=mail_id
-        )
-        if (
-            mail.receiver != request.user
-            and mail.sender != request.user
-):
-            return Response({
-
-        "error": "Unauthorized"
-
-    }, status=403)
+        mail = Email.objects.get(id=mail_id)
 
     except Email.DoesNotExist:
-
         return Response({
             "error": "Mail not found"
         }, status=404)
 
-    # 🗑️ Move to trash
-    mail.is_deleted = True
+    # ==========================================
+    # DRAFT → PERMANENT DELETE
+    # ==========================================
 
-    mail.save()
+    if mail.is_draft and mail.sender == request.user:
+
+        mail.delete()
+
+        return Response({
+            "message": "Draft deleted permanently"
+        }, status=200)
+
+    # ==========================================
+    # SENT → MOVE TO TRASH
+    # ==========================================
+
+    if mail.sender == request.user:
+
+        mail.is_deleted = True
+        mail.deleted_from = "sent"
+        mail.save()
+
+        return Response({
+            "message": "Mail moved to trash",
+            "deleted_from": "sent"
+        }, status=200)
+
+    # ==========================================
+    # INBOX → MOVE TO TRASH
+    # ==========================================
+
+    if mail.receiver == request.user:
+
+        mail.is_deleted = True
+        mail.deleted_from = "inbox"
+        mail.save()
+
+        return Response({
+            "message": "Mail moved to trash",
+            "deleted_from": "inbox"
+        }, status=200)
 
     return Response({
-        "message": "Mail moved to trash"
-    })
+        "error": "Unauthorized"
+    }, status=403)
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def trash(request):
 
-    mails = Email.objects.filter(
-        receiver=request.user,
-        is_deleted=True
-    )
+#@api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def trash(request):
+#     mails = Email.objects.filter(
+#         Q(
+#             sender=request.user,
+#             sender_deleted=True
+#         )
+#         |
+#         Q(
+#             receiver=request.user,
+#             receiver_deleted=True
+#         )
+#     ).order_by('-created_at')
 
-    data = []
+#     data = []
 
-    for mail in mails:
+#     for mail in mails:
 
-        data.append({
+#         # ==========================================
+#         # SENT MAIL DELETED BY CURRENT USER
+#         # ==========================================
 
-            "id": mail.id,
+#         if (
+#             mail.sender == request.user
+#             and mail.sender_deleted
+#         ):
 
-            "sender": mail.sender.username,
+#             display_email = mail.receiver.username
+#             mail_type = "sent"
 
-            "subject": mail.subject
-        })
+#         # ==========================================
+#         # INBOX MAIL DELETED BY CURRENT USER
+#         # ==========================================
 
-    return Response(data)
+#         elif (
+#             mail.receiver == request.user
+#             and mail.receiver_deleted
+#         ):
+
+#             display_email = mail.sender.username
+#             mail_type = "received"
+
+#         else:
+#             continue
+
+#         data.append({
+
+#             "id": mail.id,
+
+#             "sender": mail.sender.username,
+
+#             "recipient": mail.receiver.username,
+
+#             "displayEmail": display_email,
+
+#             "mailType": mail_type,
+
+#             "subject": mail.subject,
+
+#             "preview": mail.message[:50],
+
+#             "time": mail.created_at.strftime(
+#                 "%d %b %Y, %I:%M %p"
+#             ),
+
+#             "avatar": display_email[0].upper(),
+
+#             "unread": False,
+
+#             "is_starred": mail.is_starred,
+
+#             "hasAttachment": bool(
+#                 mail.encrypted_attachment
+#             )
+#         })
+
+#     return Response(data)
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
 def edit_mail(request, mail_id):
 
     try:
-
         mail = Email.objects.get(
             id=mail_id,
             sender=request.user
         )
 
     except Email.DoesNotExist:
-
         return Response({
             "error": "Mail not found"
         }, status=404)
 
-    # 🔒 Prevent editing after reply
+    # Prevent editing after reply
     if mail.is_replied:
-
         return Response({
             "error": "Cannot edit. Receiver already replied."
         }, status=400)
 
-    # ✏️ Get new data
+    # Get edited data
     new_subject = request.data.get('subject')
-
     new_message = request.data.get('message')
 
-    # 🔐 Re-encrypt
+    if not new_message:
+        return Response({
+            "error": "Message cannot be empty"
+        }, status=400)
+
+    # Re-encrypt edited message
     encrypted_data = encrypt_message(new_message)
 
-    # ✅ Update
+    # Update mail
     mail.subject = new_subject
-
     mail.message = new_message
 
     mail.encrypted_message = encrypted_data["encrypted"]
-
     mail.iv = encrypted_data["iv"]
-
     mail.auth_tag = encrypted_data["auth_tag"]
-
     mail.key_id = encrypted_data["key_id"]
-
     mail.key = encrypted_data["key"]
 
     mail.save()
 
     return Response({
         "message": "Mail updated successfully"
-    })
+    }, status=200)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -883,26 +1160,55 @@ def star_mail(request, mail_id):
 def restore_mail(request, mail_id):
 
     try:
-
         mail = Email.objects.get(
             id=mail_id,
-            receiver=request.user,
             is_deleted=True
         )
 
     except Email.DoesNotExist:
-
         return Response({
-            "error": "Mail not found"
+            "error": "Mail not found in trash"
         }, status=404)
 
-    mail.is_deleted = False
+    # ==========================================
+    # RESTORE SENT MAIL
+    # ==========================================
 
-    mail.save()
+    if (
+        mail.sender == request.user
+        and mail.deleted_from == "sent"
+    ):
+
+        mail.is_deleted = False
+        mail.deleted_from = None
+        mail.save()
+
+        return Response({
+            "message": "Mail restored successfully",
+            "restored_to": "sent"
+        })
+
+    # ==========================================
+    # RESTORE INBOX MAIL
+    # ==========================================
+
+    if (
+        mail.receiver == request.user
+        and mail.deleted_from == "inbox"
+    ):
+
+        mail.is_deleted = False
+        mail.deleted_from = None
+        mail.save()
+
+        return Response({
+            "message": "Mail restored successfully",
+            "restored_to": "inbox"
+        })
 
     return Response({
-        "message": "Mail restored successfully"
-    })
+        "error": "Unauthorized"
+    }, status=403)
 from django.core.files.base import ContentFile
 
 from .utils import (
@@ -1013,7 +1319,6 @@ from django.utils import timezone
 from datetime import timedelta
 
 @api_view(['POST'])
-
 def verify_forgot_otp(request):
 
     email = request.data.get("email")
@@ -1344,12 +1649,12 @@ def get_drafts(request):
     data = []
 
     for mail in drafts:
-
         data.append({
-
             "id": mail.id,
             "sender": mail.sender.username,
+            "receiver": mail.all_receivers or "",
             "subject": mail.subject,
+            "message": mail.message,
             "preview": mail.message[:50],
             "time": mail.created_at.strftime("%d %b %Y, %I:%M %p"),
             "avatar": mail.sender.username[0].upper(),
@@ -1364,32 +1669,204 @@ def get_drafts(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_sent_mails(request):
-
     sent = Email.objects.filter(
-    sender=request.user,
-    is_draft=False,
-    is_deleted=False
-).exclude(receiver=request.user)
+        sender=request.user,
+        is_draft=False,
+        is_deleted=False
+    ).exclude(
+        receiver=request.user
+    ).order_by('-created_at')
 
     data = []
 
     for mail in sent:
-
         data.append({
-
             "id": mail.id,
-            "sender": mail.receiver.username,
+            "sender": mail.sender.username,
+            "recipient": mail.receiver.username,
             "subject": mail.subject,
             "preview": mail.message[:50],
-            "time": mail.created_at.strftime("%d %b %Y, %I:%M %p"),
+            "time": mail.created_at.strftime(
+                "%d %b %Y, %I:%M %p"
+            ),
             "avatar": mail.receiver.username[0].upper(),
             "unread": False,
             "is_starred": mail.is_starred,
             "is_read": mail.is_read,
-            "hasAttachment": bool(mail.encrypted_attachment)
+            "hasAttachment": bool(
+                mail.encrypted_attachment
+            )
         })
 
     return Response(data)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def send_draft(request, mail_id):
+
+    # =========================================================
+    # FIND DRAFT
+    # =========================================================
+
+    try:
+        draft = Email.objects.get(
+            id=mail_id,
+            sender=request.user,
+            is_draft=True
+        )
+
+    except Email.DoesNotExist:
+        return Response({
+            "error": "Draft not found"
+        }, status=404)
+
+
+    # =========================================================
+    # GET RECIPIENTS
+    # =========================================================
+
+    receivers = draft.all_receivers
+
+    if not receivers:
+        return Response({
+            "error": "Recipient email is required"
+        }, status=400)
+
+    # Convert comma-separated recipients into list
+    receiver_emails = [
+        email.strip()
+        for email in receivers.split(",")
+        if email.strip()
+    ]
+
+
+    if not receiver_emails:
+        return Response({
+            "error": "Recipient email is required"
+        }, status=400)
+
+
+    # =========================================================
+    # CHECK MESSAGE
+    # =========================================================
+
+    if not draft.message.strip():
+
+        return Response({
+            "error": "Message cannot be empty"
+        }, status=400)
+
+
+    # =========================================================
+    # ENCRYPT MESSAGE
+    # =========================================================
+
+    encrypted_data = encrypt_message(
+        draft.message
+    )
+
+
+    # =========================================================
+    # SEND TO EACH RECIPIENT
+    # =========================================================
+
+    saved_count = 0
+
+    for receiver_email in receiver_emails:
+
+        try:
+
+            receiver = User.objects.get(
+                username=receiver_email
+            )
+
+        except User.DoesNotExist:
+
+            continue
+
+
+        # Skip deleted users
+        try:
+            profile = UserProfile.objects.get(
+                user=receiver
+            )
+
+            if profile.is_deleted:
+                continue
+
+        except UserProfile.DoesNotExist:
+            pass
+
+
+        # Create actual sent email
+        Email.objects.create(
+
+            sender=request.user,
+
+            receiver=receiver,
+
+            subject=draft.subject,
+
+            message=draft.message,
+
+            encrypted_message=
+                encrypted_data["encrypted"],
+
+            iv=
+                encrypted_data["iv"],
+
+            auth_tag=
+                encrypted_data["auth_tag"],
+
+            key_id=
+                encrypted_data["key_id"],
+
+            key=
+                encrypted_data["key_id"]
+                if False else encrypted_data["key"],
+
+            all_receivers=
+                draft.all_receivers,
+
+            is_draft=False,
+
+            is_deleted=False
+        )
+
+
+        saved_count += 1
+
+
+    # =========================================================
+    # NO VALID RECIPIENT
+    # =========================================================
+
+    if saved_count == 0:
+
+        return Response({
+            "error": "No valid recipients found"
+        }, status=400)
+
+
+    # =========================================================
+    # DELETE THE OLD DRAFT
+    # =========================================================
+
+    draft.delete()
+
+
+    # =========================================================
+    # SUCCESS
+    # =========================================================
+
+    return Response({
+
+        "message": "Draft sent successfully",
+
+        "recipients": receiver_emails
+
+    }, status=200)
+
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -1460,26 +1937,50 @@ def get_starred_mails(request):
         })
 
     return Response(data)
+from django.db.models import Q
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-
 def get_trash_mails(request):
 
     mails = Email.objects.filter(
         is_deleted=True
     ).filter(
-        sender=request.user
-    ) | Email.objects.filter(
-        is_deleted=True,
-        receiver=request.user
-    )
-
-    mails = mails.order_by("-created_at")
+        Q(
+            sender=request.user,
+            deleted_from="sent"
+        )
+        |
+        Q(
+            receiver=request.user,
+            deleted_from="inbox"
+        )
+    ).order_by("-created_at")
 
     data = []
 
     for mail in mails:
+
+        # Sent mail deleted by current user
+        if (
+            mail.sender == request.user
+            and mail.deleted_from == "sent"
+        ):
+
+            display_email = mail.receiver.username
+            mail_type = "sent"
+
+        # Received mail deleted by current user
+        elif (
+            mail.receiver == request.user
+            and mail.deleted_from == "inbox"
+        ):
+
+            display_email = mail.sender.username
+            mail_type = "received"
+
+        else:
+            continue
 
         data.append({
 
@@ -1487,19 +1988,29 @@ def get_trash_mails(request):
 
             "sender": mail.sender.username,
 
+            "recipient": mail.receiver.username,
+
+            "displayEmail": display_email,
+
+            "mailType": mail_type,
+
             "subject": mail.subject,
 
             "preview": mail.message[:50],
 
-            "time": mail.created_at.strftime("%d %b %Y, %I:%M %p"),
+            "time": mail.created_at.strftime(
+                "%d %b %Y, %I:%M %p"
+            ),
 
-            "avatar": mail.sender.username[0].upper(),
+            "avatar": display_email[0].upper(),
 
             "unread": False,
 
             "is_starred": mail.is_starred,
 
-            "hasAttachment": bool(mail.encrypted_attachment)
+            "hasAttachment": bool(
+                mail.encrypted_attachment
+            )
         })
 
     return Response(data)

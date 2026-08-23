@@ -30,8 +30,12 @@ class Email(models.Model):
     key_id = models.CharField(max_length=100)
 
     key = models.TextField(default="")
-
     is_deleted = models.BooleanField(default=False)
+    deleted_from = models.CharField(
+    max_length=20,
+    null=True,
+    blank=True
+)
 
     is_replied = models.BooleanField(default=False)
 

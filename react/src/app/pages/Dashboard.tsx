@@ -8,7 +8,6 @@ import {
   Edit,
   Search,
   Filter,
-  RefreshCw,
   Bell,
   Settings,
   User,
@@ -23,6 +22,7 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const navigate = useNavigate();
   const [emails, setEmails] = useState<any[]>([]);
+  const [isFetching, setIsFetching] = useState(false);
   const [mailCounts, setMailCounts] = useState({
     inbox: 0,
     sent: 0,
@@ -31,12 +31,24 @@ export default function Dashboard() {
     trash: 0,
   });
 
-  const filteredEmails = emails.filter((email: any) => {
-    if (activeFolder === "drafts") return email.is_draft === true;
-    if (activeFolder === "starred") return email.is_starred === true;
-    if (activeFolder === "inbox") return !email.is_draft;
-    return true;
-  });
+  const filteredEmails = [...emails]
+    .filter((email: any) => {
+      if (activeFolder === "drafts") return email.is_draft === true;
+      if (activeFolder === "starred") return email.is_starred === true;
+      if (activeFolder === "inbox") return !email.is_draft;
+      return true;
+    })
+    .sort((a: any, b: any) => {
+      const dateA = new Date(
+        a.created_at || a.time
+      ).getTime();
+
+      const dateB = new Date(
+        b.created_at || b.time
+      ).getTime();
+
+      return dateB - dateA;
+    });
 
   const fetchMailCounts = async () => {
     try {
@@ -88,6 +100,8 @@ export default function Dashboard() {
 
   const fetchEmails = async (folder: MailFolder = activeFolder) => {
     try {
+      setIsFetching(true);
+
       const token = localStorage.getItem("access");
       let endpoint = "";
 
@@ -110,9 +124,13 @@ export default function Dashboard() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
+      if (folder === "trash") {
+        console.log("TRASH DATA:", data);
+      }
       console.log(data);
 
       if (folder === "drafts") {
+
         const formattedDrafts = data.map((draft: any) => ({
           ...draft,
           sender: draft.receivers || "Draft",
@@ -120,12 +138,40 @@ export default function Dashboard() {
           time: draft.time,
           avatar: draft.receivers?.charAt(0)?.toUpperCase() || "D",
         }));
+
         setEmails(formattedDrafts);
+
+      } else if (folder === "trash") {
+
+        const formattedTrash = data.map((mail: any) => ({
+
+          ...mail,
+
+          // If mail was sent by me -> show recipient
+          // If mail was received by me -> show sender
+          displayEmail:
+            mail.displayEmail ||
+            (
+              mail.mailType === "sent"
+                ? mail.recipient
+                : mail.sender
+            ),
+
+        }));
+
+        console.log("FORMATTED TRASH:", formattedTrash);
+
+        setEmails(formattedTrash);
+
       } else {
+
         setEmails(data);
+
       }
     } catch (error) {
       console.log(error);
+    } finally {
+      setIsFetching(false);
     }
   };
   const handleLogoClick = async (
@@ -141,11 +187,11 @@ export default function Dashboard() {
 };
 
   const folders = [
-    { id: "inbox", label: "Inbox", icon: Inbox, count: mailCounts.inbox },
-    { id: "sent", label: "Sent", icon: Send, count: null },
-    { id: "drafts", label: "Drafts", icon: FileText, count: mailCounts.drafts },
-    { id: "starred", label: "Starred", icon: Star, count: null },
-    { id: "trash", label: "Trash", icon: Trash2, count: mailCounts.trash },
+    { id: "inbox", label: "Inbox", icon: Inbox },
+    { id: "sent", label: "Sent", icon: Send },
+    { id: "drafts", label: "Drafts", icon: FileText },
+    { id: "starred", label: "Starred", icon: Star },
+    { id: "trash", label: "Trash", icon: Trash2 },
   ];
 
   return (
@@ -252,7 +298,9 @@ export default function Dashboard() {
               return (
                 <button
                   key={folder.id}
-                  onClick={() => setActiveFolder(folder.id as MailFolder)}
+                  onClick={() => {
+                    setActiveFolder(folder.id as MailFolder);
+                  }}
                   className="w-full px-4 py-2.5 rounded-lg flex items-center gap-3 transition-all duration-200"
                   style={{
                     background: isActive ? "rgba(184,155,94,0.14)" : "transparent",
@@ -263,18 +311,6 @@ export default function Dashboard() {
                 >
                   <Icon className="w-4 h-4" />
                   <span className="flex-1 text-left text-sm font-medium">{folder.label}</span>
-                  {folder.count !== null && (
-                    <span
-                      className="text-xs px-2 py-0.5 rounded-full"
-                      style={{
-                        background: "rgba(184,155,94,0.15)",
-                        color: "#B89B5E",
-                        fontFamily: "JetBrains Mono, monospace",
-                      }}
-                    >
-                      {folder.count}
-                    </span>
-                  )}
                 </button>
               );
             })}
@@ -318,7 +354,7 @@ export default function Dashboard() {
 
           {/* Email List */}
           <div className="flex-1 overflow-y-auto p-4 space-y-2 hide-scrollbar">
-            {filteredEmails.length === 0 ? (
+            {isFetching ? null : filteredEmails.length === 0 ? (
               <div
                 className="flex items-center justify-center h-64"
                 style={{
@@ -364,14 +400,29 @@ export default function Dashboard() {
                       <div className="flex items-center gap-2 mb-1">
                         <span
                           className="font-semibold text-sm"
-                          onClick={() => navigate(`/readmail/${email.id}`)}
+                          onClick={() =>
+                            navigate(`/readmail/${email.id}`, {
+                              state: {
+                                folder: activeFolder,
+                                draft: activeFolder === "drafts" ? email : null,
+                                // Preserve Trash mail direction
+                                mailType: activeFolder === "trash" ? email.mailType : null,
+                                sender: activeFolder === "trash" ? email.sender : null,
+                                recipient: activeFolder === "trash" ? email.recipient : null,
+                              },
+                            })
+                          }
                           style={{
                             fontWeight: email.unread ? 700 : 500,
                             color: "#3B2A23",
                             cursor: "pointer",
                           }}
                         >
-                          {email.sender}
+                          {activeFolder === "sent"
+                            ? email.recipient
+                            : activeFolder === "trash"
+                              ? email.displayEmail
+                              : email.sender}
                         </span>
                         {email.hasAttachment && (
                           <Paperclip className="w-3 h-3" style={{ color: "#A89B91" }} />
