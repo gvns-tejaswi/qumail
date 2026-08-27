@@ -9,6 +9,10 @@ import ReadEmail from "./pages/ReadEmail";
 import ChangePassword from "./pages/ChangePassword";
 import Settings from "./pages/Settings";
 import Compose from "./pages/Compose";
+import AdminDashboard from "./pages/AdminDashboard";
+import AdminMail from "./pages/AdminMail";
+import AdminUsers from "./pages/AdminUsers";
+import AdminNotification from "./pages/AdminNotification";
 
 export const router = createBrowserRouter([
   {
@@ -40,5 +44,21 @@ export const router = createBrowserRouter([
   {
     path: "/compose",
     Component: Compose,
+  },
+  {
+    path: "/admin-dashboard",
+    Component: AdminDashboard,
+  },
+  {
+    path: "/admin/mails",
+    Component: AdminMail,
+  },
+  {
+    path: "/adminusers",
+    Component: AdminUsers,
+  },
+  {
+    path: "/admin-notifications",
+    Component: AdminNotification,
   },
 ]);

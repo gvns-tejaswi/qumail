@@ -2,15 +2,17 @@ import re
 from unicodedata import name
 from django.contrib.auth.models import User
 from django.db.models import Q
+from django.utils import timezone
 from requests import request
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from django.http import HttpResponse
 from channels.layers import get_channel_layer
 import os
 from asgiref.sync import async_to_sync
 
-from .models import LoginActivity, UserProfile
+from .models import AdminNotification, LoginActivity, UserProfile
 from .utils import encrypt_message
 from .utils import decrypt_message
 from .models import OTP
@@ -229,155 +231,393 @@ def login(request):
     # GET LOGIN DATA
     # =========================================================
 
-    email = request.data.get('username', '').strip()
-    password = request.data.get('password', '')
+    email = request.data.get(
+        'username',
+        ''
+    ).strip()
 
-    ip = request.META.get('REMOTE_ADDR')
+    password = request.data.get(
+        'password',
+        ''
+    )
+
+    ip = request.META.get(
+        'REMOTE_ADDR',
+        ''
+    )
 
     device = request.META.get(
         'HTTP_USER_AGENT',
         'Unknown Device'
     )
 
-
     # =========================================================
-    # EMPTY FIELD VALIDATION
+    # VALIDATION
     # =========================================================
 
-    # BOTH EMPTY
-    if not email and not password:
-        return Response({
-            "errors": {
-                "email": "Enter your email",
-                "password": "Enter your password"
-            }
-        }, status=400)
-
-
-    # EMAIL EMPTY
     if not email:
+
         return Response({
             "errors": {
                 "email": "Enter your email"
             }
         }, status=400)
 
-
-    # PASSWORD EMPTY
     if not password:
+
         return Response({
             "errors": {
                 "password": "Enter your password"
             }
         }, status=400)
 
-
     # =========================================================
-    # FIND USER USING EMAIL
+    # FIND USER
     # =========================================================
 
     try:
-        existing_user = User.objects.get(
+
+        user = User.objects.get(
             username=email
         )
 
     except User.DoesNotExist:
-        existing_user = None
 
-
-    # =========================================================
-    # INVALID EMAIL
-    # =========================================================
-
-    if existing_user is None:
         return Response({
             "error_type": "email",
             "error": "Invalid email ID"
         }, status=401)
 
-
     # =========================================================
-    # CHECK DELETED ACCOUNT
+    # CHECK ACCOUNT STATUS
     # =========================================================
 
-    if not existing_user.is_active:
+    if not user.is_active:
+
         return Response({
             "error": "This account has been deleted."
         }, status=403)
-
-
-    # =========================================================
-    # CHECK PASSWORD
-    # =========================================================
-
-    password_valid = existing_user.check_password(
-        password
-    )
-
-
-    # =========================================================
-    # INVALID PASSWORD
-    # =========================================================
-
-    if not password_valid:
-
-        LoginActivity.objects.create(
-            user=existing_user,
-            ip_address=ip,
-            device=device,
-            status="FAILED",
-            is_active=False
-        )
-
-        return Response({
-            "error_type": "password",
-            "error": "Invalid password"
-        }, status=401)
-
-
-    # =========================================================
-    # LOGIN SUCCESS
-    # =========================================================
-
-    user = existing_user
-
-
-    # =========================================================
-    # CREATE JWT TOKENS
-    # =========================================================
-
-    refresh = RefreshToken.for_user(user)
-
-
-    # =========================================================
-    # SAVE LOGIN ACTIVITY
-    # =========================================================
-
-    LoginActivity.objects.create(
-        user=user,
-        ip_address=ip,
-        device=device,
-        status="SUCCESS",
-        is_active=True
-    )
-
 
     # =========================================================
     # GET USER PROFILE
     # =========================================================
 
-    try:
-        profile = UserProfile.objects.get(
-            user=user
-        )
-
-    except UserProfile.DoesNotExist:
-
-        profile = None
-
+    profile = UserProfile.objects.filter(
+        user=user
+    ).first()
 
     # =========================================================
-    # SEND LOGIN SMS
+    # CHECK NORMAL ACCOUNT LOCK
+    # =========================================================
+
+    if profile and profile.is_locked:
+
+        # -----------------------------------------------------
+        # If this is a temporary-password account, we still
+        # allow the temporary password to be checked below.
+        # -----------------------------------------------------
+
+        if not profile.must_change_password:
+
+            return Response({
+
+                "error_type":
+                    "account_locked",
+
+                "error": (
+                    "Your account is locked because of "
+                    "three failed login attempts. "
+                    "Please contact the administrator."
+                ),
+
+                "attempts":
+                    profile.failed_login_attempts
+
+            }, status=403)
+
+    # =========================================================
+    # CHECK PASSWORD
+    # =========================================================
+
+    password_correct = user.check_password(
+        password
+    )
+
+    # =========================================================
+    # TEMPORARY PASSWORD FLOW
+    # =========================================================
+
+    if (
+        password_correct
+        and profile
+        and profile.must_change_password
+    ):
+
+        # -----------------------------------------------------
+        # CHECK WHETHER TEMPORARY PASSWORD HAS EXPIRED
+        # -----------------------------------------------------
+
+        if (
+            not profile.temporary_password_expiry
+            or timezone.now() >
+            profile.temporary_password_expiry
+        ):
+
+            # ================================================
+            # EXPIRE TEMPORARY PASSWORD
+            # ================================================
+
+            profile.must_change_password = False
+
+            profile.is_locked = True
+
+            profile.temporary_password_expiry = None
+
+            profile.save(
+                update_fields=[
+                    "must_change_password",
+                    "is_locked",
+                    "temporary_password_expiry"
+                ]
+            )
+
+            # ================================================
+            # ADMIN NOTIFICATION
+            # ================================================
+
+            channel_layer = get_channel_layer()
+
+            async_to_sync(
+                channel_layer.group_send
+            )(
+                "notifications",
+                {
+                    "type": "send_notification",
+
+                    "message": (
+                        "🔒 Temporary Password Expired: "
+                        f"Temporary password for user "
+                        f"{user.username} has expired. "
+                        "Please generate a new temporary password."
+                    )
+                }
+            )
+
+            # ================================================
+            # RESPONSE TO USER
+            # ================================================
+
+            return Response({
+
+                "error_type":
+                    "temporary_password_expired",
+
+                "error": (
+                    "Your temporary password has expired. "
+                    "Please contact the administrator "
+                    "to generate a new temporary password."
+                )
+
+            }, status=403)
+
+        # -----------------------------------------------------
+        # TEMPORARY PASSWORD IS VALID
+        # -----------------------------------------------------
+
+        # IMPORTANT:
+        # Do NOT reset must_change_password here.
+        #
+        # The frontend will receive True and redirect the
+        # user to Change Password.
+
+    # =========================================================
+    # WRONG PASSWORD
+    # =========================================================
+
+    if not password_correct:
+
+        # -----------------------------------------------------
+        # RECORD FAILED LOGIN
+        # -----------------------------------------------------
+
+        LoginActivity.objects.create(
+
+            user=user,
+
+            ip_address=ip,
+
+            device=device,
+
+            status="FAILED",
+
+            is_active=False
+        )
+
+        # -----------------------------------------------------
+        # UPDATE FAILED ATTEMPTS
+        # -----------------------------------------------------
+
+        if profile:
+
+            profile.failed_login_attempts += 1
+
+            # ================================================
+            # THIRD FAILED ATTEMPT
+            # ================================================
+
+            if profile.failed_login_attempts >= 3:
+
+                profile.is_locked = True
+
+                profile.save(
+                    update_fields=[
+                        "failed_login_attempts",
+                        "is_locked"
+                    ]
+                )
+
+                # =========================================================
+                # ADMIN NOTIFICATION - TERMINAL TEST OUTPUT
+                # =========================================================
+
+                admin_message = (
+                    "🔒 Security Alert: "
+                    f"User {user.username} has failed login 3 times. "
+                    "The account has been locked. "
+                    "Please generate a new temporary password."
+                )
+
+                AdminNotification.objects.create(
+                    user=user,
+                    message=admin_message,
+                    notification_type="SECURITY"
+                )
+
+                print("\n")
+                print("==============================================")
+                print("          ADMIN SECURITY NOTIFICATION")
+                print("==============================================")
+                print(admin_message)
+                print("==============================================")
+                print("\n")
+
+                # =========================================================
+                # SEND NOTIFICATION TO ADMIN DASHBOARD
+                # =========================================================
+
+                channel_layer = get_channel_layer()
+
+                async_to_sync(
+                    channel_layer.group_send
+                )(
+                    "notifications",
+                    {
+                        "type": "send_notification",
+                        "message": admin_message
+                    }
+                )
+
+                return Response({
+
+                    "error_type":
+                        "account_locked",
+
+                    "error": (
+                        "Three failed login attempts. "
+                        "Your account has been locked. "
+                        "Please contact the administrator."
+                    ),
+
+                    "attempts": 3
+
+                }, status=403)
+
+            # ================================================
+            # SAVE 1ST / 2ND ATTEMPT
+            # ================================================
+
+            profile.save(
+                update_fields=[
+                    "failed_login_attempts"
+                ]
+            )
+
+            attempts_remaining = (
+                3 -
+                profile.failed_login_attempts
+            )
+
+        else:
+
+            attempts_remaining = None
+
+        # =====================================================
+        # WRONG PASSWORD RESPONSE
+        # =====================================================
+
+        response_data = {
+
+            "error_type":
+                "password",
+
+            "error":
+                "Invalid password"
+        }
+
+        if attempts_remaining is not None:
+
+            response_data[
+                "attempts_remaining"
+            ] = attempts_remaining
+
+        return Response(
+            response_data,
+            status=401
+        )
+
+    # =========================================================
+    # SUCCESSFUL LOGIN
+    # =========================================================
+
+    if profile:
+
+        # Reset failed attempts
+
+        profile.failed_login_attempts = 0
+
+        profile.save(
+            update_fields=[
+                "failed_login_attempts"
+            ]
+        )
+
+    # =========================================================
+    # CREATE JWT
+    # =========================================================
+
+    refresh = RefreshToken.for_user(
+        user
+    )
+
+    # =========================================================
+    # LOGIN ACTIVITY
+    # =========================================================
+
+    LoginActivity.objects.create(
+
+        user=user,
+
+        ip_address=ip,
+
+        device=device,
+
+        status="SUCCESS",
+
+        is_active=True
+    )
+
+    # =========================================================
+    # LOGIN SMS
     # =========================================================
 
     if profile:
@@ -385,20 +625,33 @@ def login(request):
         try:
 
             sns_client = boto3.client(
-                "sns",
-                region_name="us-east-2",
-                aws_access_key_id="AKIA525EB66VL3Y5ZOWW",
-                aws_secret_access_key="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"
-            )
 
-            message = (
-                "QMail Security Alert:\n"
-                "You have successfully logged into your account."
+                "sns",
+
+                region_name=os.environ.get(
+                    "AWS_REGION",
+                    "us-east-2"
+                ),
+
+                aws_access_key_id=os.environ.get(
+                    "AWS_ACCESS_KEY_ID"
+                ),
+
+                aws_secret_access_key=os.environ.get(
+                    "AWS_SECRET_ACCESS_KEY"
+                )
             )
 
             sms_response = sns_client.publish(
-                PhoneNumber="+91" + profile.phone_number,
-                Message=message
+
+                PhoneNumber=
+                "+91" + profile.phone_number,
+
+                Message=(
+                    "QMail Security Alert:\n"
+                    "You have successfully logged "
+                    "into your account."
+                )
             )
 
             print(
@@ -408,28 +661,372 @@ def login(request):
 
         except Exception as e:
 
-            # SMS failure should NOT stop login
             print(
                 "LOGIN SMS FAILED:",
                 str(e)
             )
 
-
     # =========================================================
-    # SUCCESS RESPONSE
+    # FINAL LOGIN RESPONSE
     # =========================================================
 
     return Response({
 
-        "access": str(
-            refresh.access_token
-        ),
+        "access":
+            str(refresh.access_token),
 
-        "refresh": str(
-            refresh
+        "refresh":
+            str(refresh),
+
+        "is_admin":
+            user.is_staff,
+
+        "must_change_password": (
+            profile.must_change_password
+            if profile
+            else False
         )
 
     }, status=200)
+
+# =========================================================
+# ADMIN - GENERATE TEMPORARY PASSWORD
+# =========================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def admin_generate_temp_password(request, user_id):
+
+    # =====================================================
+    # CHECK ADMIN
+    # =====================================================
+
+    if not request.user.is_staff:
+
+        return Response({
+            "error": "Admin access required"
+        }, status=403)
+
+    # =====================================================
+    # GET USER
+    # =====================================================
+
+    try:
+
+        user = User.objects.get(
+            id=user_id
+        )
+
+    except User.DoesNotExist:
+
+        return Response({
+            "error": "User not found"
+        }, status=404)
+
+    # =====================================================
+    # GET USER PROFILE
+    # =====================================================
+
+    try:
+
+        profile = UserProfile.objects.get(
+            user=user
+        )
+
+    except UserProfile.DoesNotExist:
+
+        return Response({
+            "error": "User profile not found"
+        }, status=404)
+
+    # =====================================================
+    # CHECK PHONE NUMBER
+    # =====================================================
+
+    if not profile.phone_number:
+
+        return Response({
+            "error":
+                "User does not have a registered phone number"
+        }, status=400)
+
+    # =====================================================
+    # GENERATE RANDOM PASSWORD
+    # =====================================================
+
+    characters = (
+        string.ascii_letters +
+        string.digits +
+        "!@#$%^&*"
+    )
+
+    temporary_password = ''.join(
+
+        secrets.choice(characters)
+
+        for _ in range(12)
+    )
+
+    # =====================================================
+    # SET PASSWORD
+    # =====================================================
+
+    user.set_password(
+        temporary_password
+    )
+
+    user.save(
+        update_fields=[
+            "password"
+        ]
+    )
+
+    # =====================================================
+    # SET TEMPORARY PASSWORD STATUS
+    # =====================================================
+
+    profile.failed_login_attempts = 0
+
+    profile.is_locked = False
+
+    profile.must_change_password = True
+
+    profile.temporary_password_expiry = (
+        timezone.now() +
+        timedelta(minutes=5)
+    )
+
+    profile.save(
+        update_fields=[
+            "failed_login_attempts",
+            "is_locked",
+            "must_change_password",
+            "temporary_password_expiry"
+        ]
+    )
+
+    # =====================================================
+    # SMS MESSAGE
+    # =====================================================
+
+    sms_message = (
+
+        "QMail Security Alert:\n"
+
+        "Your account was locked due to "
+        "multiple failed login attempts.\n\n"
+
+        "Your temporary password is: "
+        f"{temporary_password}\n\n"
+
+        "This password is valid for 5 minutes only. "
+
+        "Please login and change your password "
+        "immediately.\n\n"
+
+        "- QMail Administrator"
+    )
+
+    # =====================================================
+    # SEND SMS
+    # =====================================================
+
+    try:
+
+        sns_client = boto3.client(
+
+            "sns",
+
+            region_name=os.environ.get(
+                "AWS_REGION",
+                "us-east-2"
+            ),
+
+            aws_access_key_id=os.environ.get(
+                "AWS_ACCESS_KEY_ID"
+            ),
+
+            aws_secret_access_key=os.environ.get(
+                "AWS_SECRET_ACCESS_KEY"
+            )
+        )
+
+        sms_response = sns_client.publish(
+
+            PhoneNumber=
+            "+91" + profile.phone_number,
+
+            Message=sms_message
+        )
+        print("\n")
+        print("==============================================")
+        print("          TEMPORARY PASSWORD SMS")
+        print("==============================================")
+        print("User:", user.username)
+        print("Phone:", profile.phone_number)
+        print("Temporary Password:", temporary_password)
+        print("Expires In: 5 minutes")
+        print("----------------------------------------------")
+        print("MESSAGE:")
+        print("----------------------------------------------")
+        print(sms_message)
+        print("----------------------------------------------")
+        print("SMS SENT SUCCESSFULLY")
+        print("==============================================")
+        print("\n")
+        # =================================================
+        # PRINT TO TERMINAL
+        # =================================================
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "TEMPORARY PASSWORD SMS"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            "User:",
+            user.username
+        )
+
+        print(
+            "Phone:",
+            profile.phone_number
+        )
+
+        print(
+            "Temporary Password:",
+            temporary_password
+        )
+
+        print(
+            "Expires In: 5 minutes"
+        )
+
+        print(
+            "----------------------------------------"
+        )
+
+        print(
+            "MESSAGE:"
+        )
+
+        print(
+            sms_message
+        )
+
+        print(
+            "----------------------------------------"
+        )
+
+        print(
+            "SMS SENT SUCCESSFULLY"
+        )
+
+        print(
+            "SNS RESPONSE:",
+            sms_response
+        )
+
+        print(
+            "========================================\n"
+        )
+
+    except Exception as e:
+
+        # =================================================
+        # SMS FAILED
+        # =================================================
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "TEMPORARY PASSWORD SMS FAILED"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            "User:",
+            user.username
+        )
+
+        print(
+            "Phone:",
+            profile.phone_number
+        )
+
+        print(
+            "Temporary Password:",
+            temporary_password
+        )
+
+        print(
+            "Error:",
+            str(e)
+        )
+
+        print(
+            "========================================\n"
+        )
+
+        return Response({
+
+            "error": (
+                "Temporary password was generated, "
+                "but SMS could not be sent."
+            ),
+
+            "details":
+                str(e)
+
+        }, status=500)
+
+    # =====================================================
+    # SUCCESS RESPONSE
+    # =====================================================
+
+    return Response({
+
+        "message":
+            "Temporary password generated "
+            "and sent successfully",
+
+        "user": {
+
+            "id":
+                user.id,
+
+            "username":
+                user.username,
+
+            "name":
+                user.first_name or user.username
+        },
+
+        "temporary_password":
+            temporary_password,
+
+        "expires_in_minutes":
+            5,
+
+        "expires_at":
+            profile.temporary_password_expiry.strftime(
+                "%d %b %Y, %I:%M %p"
+            )
+
+    }, status=200)
+
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import permission_classes
@@ -452,21 +1049,52 @@ def send_mail(request):
         "error": "Receivers required"
 
     }, status=400)
-    # ✅ Single receiver
+    # =========================================================
+    # HANDLE SINGLE / MULTIPLE RECEIVERS
+    # =========================================================
+
     if isinstance(receiver_emails, str):
+
+        # Frontend may send:
+        # "teju@qumail.io,Deep@qumail.io"
+
         receiver_emails = [
-        receiver_emails.strip()
-    ]
-    # ✅ Multiple receivers
+            email.strip()
+            for email in receiver_emails.split(",")
+            if email.strip()
+        ]
+
     elif isinstance(receiver_emails, list):
+
         receiver_emails = [
-        email.strip()
-        for email in receiver_emails
-        if email.strip()
-    ]
-        all_receivers = ",".join(
-    receiver_emails
-)
+            email.strip()
+            for email in receiver_emails
+            if email.strip()
+        ]
+
+    else:
+
+        return Response(
+            {
+                "error": "Invalid receivers format"
+            },
+            status=400
+        )
+
+    # Make sure at least one receiver exists
+    if not receiver_emails:
+
+        return Response(
+            {
+                "error": "Receivers required"
+            },
+            status=400
+        )
+
+    # Store all receivers if needed
+    all_receivers = ",".join(
+        receiver_emails
+    )
 
     subject = request.data.get('subject')
 
@@ -513,9 +1141,11 @@ def send_mail(request):
 
             continue
 
-        profile = UserProfile.objects.get(user=receiver)
+        profile = UserProfile.objects.filter(
+            user=receiver
+        ).first()
 
-        if profile.is_deleted:
+        if profile and profile.is_deleted:
             continue
 
         email = Email.objects.create(
@@ -621,8 +1251,6 @@ def inbox(request):
     ).order_by('-created_at')
     data = []
     for mail in emails:
-        mail.is_read = True
-        mail.save()
         data.append({
 
     "id": mail.id,
@@ -689,6 +1317,10 @@ def decrypt_mail(request, mail_id):
     # =========================================================
     # ATTACHMENT
     # =========================================================
+
+    if mail.receiver == request.user and not mail.is_read:
+        mail.is_read = True
+        mail.save(update_fields=["is_read"])
 
     attachment_url = None
 
@@ -2138,34 +2770,197 @@ def change_password(request):
     new_password = request.data.get("new_password")
     confirm_password = request.data.get("confirm_password")
 
-    # Check current password
-    if not request.user.check_password(current_password):
+    # =========================================================
+    # VALIDATE INPUTS
+    # =========================================================
+
+    if not current_password:
+        return Response(
+            {"error": "Current password is required"},
+            status=400
+        )
+
+    if not new_password:
+        return Response(
+            {"error": "New password is required"},
+            status=400
+        )
+
+    if not confirm_password:
+        return Response(
+            {"error": "Confirm password is required"},
+            status=400
+        )
+
+    # =========================================================
+    # CHECK CURRENT PASSWORD
+    # =========================================================
+
+    if not request.user.check_password(
+        current_password
+    ):
+
         return Response(
             {"error": "Current password is incorrect"},
             status=400
         )
 
-    # Check new password confirmation
+    # =========================================================
+    # CHECK NEW PASSWORD CONFIRMATION
+    # =========================================================
+
     if new_password != confirm_password:
+
         return Response(
-            {"error": "New password and confirm password do not match"},
+            {
+                "error":
+                    "New password and confirm password "
+                    "do not match"
+            },
             status=400
         )
 
-    # Prevent using the same password
+    # =========================================================
+    # PREVENT SAME PASSWORD
+    # =========================================================
+
     if current_password == new_password:
+
         return Response(
-            {"error": "New password cannot be the same as the current password"},
+            {
+                "error":
+                    "New password cannot be the same "
+                    "as the current password"
+            },
             status=400
         )
 
-    # Update password
-    request.user.set_password(new_password)
-    request.user.save()
+    # =========================================================
+    # GET USER PROFILE
+    # =========================================================
 
-    return Response({
-        "message": "Password changed successfully"
-    })
+    profile = UserProfile.objects.filter(
+        user=request.user
+    ).first()
+
+    # =========================================================
+    # IF THIS IS A TEMPORARY PASSWORD
+    # =========================================================
+
+    if profile and profile.must_change_password:
+
+        # -----------------------------------------------------
+        # CHECK TEMPORARY PASSWORD EXPIRY
+        # -----------------------------------------------------
+
+        if (
+            not profile.temporary_password_expiry
+            or timezone.now() >
+            profile.temporary_password_expiry
+        ):
+
+            # Temporary password has expired
+
+            profile.must_change_password = False
+
+            profile.is_locked = True
+
+            profile.temporary_password_expiry = None
+
+            profile.save(
+                update_fields=[
+                    "must_change_password",
+                    "is_locked",
+                    "temporary_password_expiry"
+                ]
+            )
+
+            # -------------------------------------------------
+            # NOTIFY ADMIN
+            # -------------------------------------------------
+
+            channel_layer = get_channel_layer()
+
+            async_to_sync(
+                channel_layer.group_send
+            )(
+                "notifications",
+                {
+                    "type":
+                        "send_notification",
+
+                    "message": (
+                        "🔒 Temporary Password Expired: "
+                        f"Temporary password for user "
+                        f"{request.user.username} "
+                        "has expired. "
+                        "Please generate a new "
+                        "temporary password."
+                    )
+                }
+            )
+
+            return Response(
+                {
+                    "error_type":
+                        "temporary_password_expired",
+
+                    "error":
+                        "Temporary password has expired. "
+                        "Please contact the administrator."
+                },
+                status=403
+            )
+
+    # =========================================================
+    # UPDATE PASSWORD
+    # =========================================================
+
+    request.user.set_password(
+        new_password
+    )
+
+    request.user.save(
+        update_fields=["password"]
+    )
+
+    # =========================================================
+    # CLEAR TEMPORARY PASSWORD STATUS
+    # =========================================================
+
+    if profile:
+
+        profile.must_change_password = False
+
+        profile.temporary_password_expiry = None
+
+        profile.is_locked = False
+
+        profile.failed_login_attempts = 0
+
+        profile.save(
+            update_fields=[
+                "must_change_password",
+                "temporary_password_expiry",
+                "is_locked",
+                "failed_login_attempts"
+            ]
+        )
+
+    # =========================================================
+    # RESPONSE
+    # =========================================================
+
+    return Response(
+        {
+            "message":
+                "Password changed successfully",
+
+            "must_change_password":
+                False
+        },
+        status=200
+    )
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -2368,4 +3163,731 @@ def permanent_delete_mail(request, mail_id):
     return Response(
         {"error": "Unauthorized"},
         status=403
+    )
+
+# =========================================================
+# ADMIN - GET ALL EMAILS
+# =========================================================
+
+# =========================================================
+# ADMIN - GET ADMIN CONVERSATIONS
+# =========================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_mails(request):
+
+    # Only staff/admin users can access this API
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Admin access required"},
+            status=403
+        )
+
+    # =====================================================
+    # GET ONLY MAILS BETWEEN ADMIN AND USERS
+    # =====================================================
+
+    mails = (
+        Email.objects
+        .filter(
+            Q(sender=request.user) |
+            Q(receiver=request.user),
+            is_draft=False,
+            is_deleted=False
+        )
+        .select_related(
+            "sender",
+            "receiver"
+        )
+        .order_by("created_at")
+    )
+
+    # =====================================================
+    # RETURN MAIL DATA
+    # =====================================================
+
+    data = []
+
+    for mail in mails:
+
+        data.append({
+
+            "id": mail.id,
+
+            # Sender
+            "sender": mail.sender.username,
+
+            "sender_name": (
+                mail.sender.first_name
+                or mail.sender.username
+            ),
+
+            # Receiver
+            "receiver": mail.receiver.username,
+
+            "receiver_name": (
+                mail.receiver.first_name
+                or mail.receiver.username
+            ),
+
+            # Mail
+            "subject": mail.subject,
+
+            "message": mail.message,
+
+            "created_at":
+                mail.created_at.isoformat(),
+
+            # Status
+            "is_replied":
+                mail.is_replied,
+
+            "is_read":
+                mail.is_read,
+
+            "is_starred":
+                mail.is_starred,
+
+            # Attachment
+            "hasAttachment":
+                bool(mail.encrypted_attachment),
+
+            "attachment": (
+                request.build_absolute_uri(
+                    mail.encrypted_attachment.url
+                )
+                if mail.encrypted_attachment
+                else None
+            ),
+        })
+
+    return Response(
+        data,
+        status=200
+    )
+# =========================================================
+# ADMIN - REPLY TO EMAIL
+# =========================================================
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_reply(request, mail_id):
+
+    # =====================================================
+    # CHECK ADMIN
+    # =====================================================
+
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Admin access required"},
+            status=403
+        )
+
+    # =====================================================
+    # GET ORIGINAL MAIL
+    # =====================================================
+
+    try:
+
+        original_mail = Email.objects.get(
+            id=mail_id,
+            is_draft=False,
+            is_deleted=False
+        )
+
+    except Email.DoesNotExist:
+
+        return Response(
+            {"error": "Mail not found"},
+            status=404
+        )
+
+    # =====================================================
+    # GET MESSAGE
+    # =====================================================
+
+    message = request.data.get(
+        "message",
+        ""
+    ).strip()
+
+    if not message:
+
+        return Response(
+            {
+                "error":
+                "Reply message cannot be empty"
+            },
+            status=400
+        )
+
+    # =====================================================
+    # ADMIN REPLY RECEIVER
+    # =====================================================
+
+    # The admin replies to whoever sent the selected mail.
+    #
+    # Example:
+    #
+    # User B → Admin
+    #
+    # Admin → User B
+    #
+    # If the selected mail was originally sent by admin,
+    # reply to its receiver.
+
+    if original_mail.sender == request.user:
+
+        receiver = original_mail.receiver
+
+    else:
+
+        receiver = original_mail.sender
+
+    # =====================================================
+    # ENCRYPT MESSAGE
+    # =====================================================
+
+    encrypted_data = encrypt_message(
+        message
+    )
+
+    # =====================================================
+    # ATTACHMENT
+    # =====================================================
+
+    attachment = request.FILES.get(
+        "attachment"
+    )
+
+    encrypted_attachment_file = None
+
+    if attachment:
+
+        file_data = attachment.read()
+
+        key = bytes.fromhex(
+            encrypted_data["key"]
+        )
+
+        encrypted_attachment_file = encrypt_file(
+            file_data,
+            key
+        )
+
+    # =====================================================
+    # CREATE REPLY
+    # =====================================================
+
+    reply = Email.objects.create(
+
+        sender=request.user,
+
+        receiver=receiver,
+
+        # VERY IMPORTANT:
+        # SAME SUBJECT
+        subject=original_mail.subject,
+
+        message=message,
+
+        encrypted_message=
+            encrypted_data["encrypted"],
+
+        iv=
+            encrypted_data["iv"],
+
+        auth_tag=
+            encrypted_data["auth_tag"],
+
+        key_id=
+            encrypted_data["key_id"],
+
+        key=
+            encrypted_data["key"],
+
+        is_deleted=False,
+
+        is_draft=False,
+
+        is_replied=True,
+
+        is_read=False,
+
+        is_starred=False,
+
+        all_receivers=
+            original_mail.all_receivers
+    )
+
+    # =====================================================
+    # SAVE ENCRYPTED ATTACHMENT
+    # =====================================================
+
+    if attachment and encrypted_attachment_file:
+
+        reply.attachment_iv = (
+            encrypted_attachment_file["iv"].hex()
+        )
+
+        reply.attachment_auth_tag = (
+            encrypted_attachment_file["tag"].hex()
+        )
+
+        reply.save()
+
+        encrypted_filename = (
+            attachment.name + ".enc"
+        )
+
+        reply.encrypted_attachment.save(
+
+            encrypted_filename,
+
+            ContentFile(
+                encrypted_attachment_file[
+                    "encrypted_file"
+                ]
+            )
+        )
+
+    # =====================================================
+    # MARK ORIGINAL AS REPLIED
+    # =====================================================
+
+    original_mail.is_replied = True
+
+    original_mail.save(
+        update_fields=["is_replied"]
+    )
+
+    # =====================================================
+    # RESPONSE
+    # =====================================================
+
+    return Response({
+
+        "message":
+            "Admin reply sent successfully",
+
+        "mail": {
+
+            "id":
+                reply.id,
+
+            "sender":
+                reply.sender.username,
+
+            "sender_name":
+                (
+                    reply.sender.first_name
+                    or reply.sender.username
+                ),
+
+            "receiver":
+                reply.receiver.username,
+
+            "receiver_name":
+                (
+                    reply.receiver.first_name
+                    or reply.receiver.username
+                ),
+
+            "subject":
+                reply.subject,
+
+            "message":
+                reply.message,
+
+            # ISO timestamp
+            "created_at":
+                reply.created_at.isoformat(),
+
+            "is_replied":
+                reply.is_replied,
+
+            "hasAttachment":
+                bool(
+                    reply.encrypted_attachment
+                )
+        }
+
+    }, status=201)
+# =========================================================
+# ADMIN - MARK A MAIL AS READ
+# =========================================================
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_mark_mail_read(request, mail_id):
+
+    # -----------------------------------------------------
+    # CHECK ADMIN
+    # -----------------------------------------------------
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    # -----------------------------------------------------
+    # FIND MAIL
+    # -----------------------------------------------------
+
+    try:
+        mail = Email.objects.get(
+            id=mail_id,
+            is_draft=False,
+            is_deleted=False
+        )
+
+    except Email.DoesNotExist:
+        return Response(
+            {
+                "error": "Mail not found"
+            },
+            status=404
+        )
+
+    # -----------------------------------------------------
+    # ADMIN MUST BE THE RECEIVER
+    # -----------------------------------------------------
+
+    if mail.receiver != request.user:
+
+        return Response(
+            {
+                "error":
+                "This mail was not received by the admin"
+            },
+            status=403
+        )
+
+    # -----------------------------------------------------
+    # MARK AS READ
+    # -----------------------------------------------------
+
+    mail.is_read = True
+
+    mail.save(
+        update_fields=["is_read"]
+    )
+
+    # -----------------------------------------------------
+    # RESPONSE
+    # -----------------------------------------------------
+
+    return Response(
+        {
+            "message": "Mail marked as read",
+            "mail_id": mail.id,
+            "is_read": True
+        },
+        status=200
+    )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_users(request):
+
+    # =====================================================
+    # CHECK ADMIN
+    # =====================================================
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    # =====================================================
+    # GET ALL REGISTERED USERS
+    # =====================================================
+
+    users = User.objects.filter(
+        is_staff=False
+    ).order_by("id")
+
+    data = []
+
+    for user in users:
+
+        profile = UserProfile.objects.filter(
+            user=user
+        ).first()
+
+        if profile:
+
+            is_locked = profile.is_locked
+
+            phone_number = (
+                profile.phone_number
+                or ""
+            )
+
+        else:
+
+            is_locked = False
+            phone_number = ""
+
+        data.append({
+
+            "id": user.id,
+
+            "name": (
+                user.first_name
+                or user.username
+            ),
+
+            "email": user.username,
+
+            "phone": phone_number,
+
+            "is_active": user.is_active,
+
+            "is_locked": is_locked,
+
+            "must_change_password": (
+                profile.must_change_password
+                if profile
+                else False
+            ),
+
+            "created_at": (
+                user.date_joined.strftime(
+                    "%d %b %Y, %I:%M %p"
+                )
+            )
+
+        })
+
+    return Response(
+        data,
+        status=200
+    )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_user_activity(request, user_id):
+
+    # =====================================================
+    # CHECK ADMIN
+    # =====================================================
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    # =====================================================
+    # GET USER
+    # =====================================================
+
+    try:
+
+        user = User.objects.get(
+            id=user_id
+        )
+
+    except User.DoesNotExist:
+
+        return Response(
+            {
+                "error": "User not found"
+            },
+            status=404
+        )
+
+    # =====================================================
+    # GET LOGIN ACTIVITIES
+    # =====================================================
+
+    activities = LoginActivity.objects.filter(
+        user=user
+    ).order_by("-login_time")[:20]
+
+    data = []
+
+    for activity in activities:
+
+        data.append({
+
+            "id": activity.id,
+
+            "ip_address":
+                activity.ip_address,
+
+            "device":
+                activity.device,
+
+            "login_time":
+                activity.login_time.strftime(
+                    "%d %b %Y, %I:%M %p"
+                ),
+
+            "logout_time":
+                (
+                    activity.logout_time.strftime(
+                        "%d %b %Y, %I:%M %p"
+                    )
+                    if activity.logout_time
+                    else None
+                ),
+
+            "is_active":
+                activity.is_active,
+
+            "status":
+                activity.status
+
+        })
+
+    return Response(
+        data,
+        status=200
+    )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_unread_notification_count(request):
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    count = AdminNotification.objects.filter(
+        is_read=False
+    ).count()
+
+    return Response(
+        {
+            "count": count
+        },
+        status=200
+    )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_notifications(request):
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    notifications = AdminNotification.objects.all().order_by(
+        "-created_at"
+    )
+
+    data = []
+
+    for notification in notifications:
+
+        data.append({
+
+            "id": notification.id,
+
+            "user_id": notification.user.id,
+
+            "username": notification.user.username,
+
+            "message": notification.message,
+
+            "type": notification.notification_type,
+
+            "is_read": notification.is_read,
+
+            "created_at": notification.created_at.strftime(
+                "%d %b %Y, %I:%M %p"
+            )
+
+        })
+
+    return Response(
+        data,
+        status=200
+    )
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_mark_notification_read(
+    request,
+    notification_id
+):
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    try:
+
+        notification = AdminNotification.objects.get(
+            id=notification_id
+        )
+
+    except AdminNotification.DoesNotExist:
+
+        return Response(
+            {
+                "error": "Notification not found"
+            },
+            status=404
+        )
+
+    notification.is_read = True
+
+    notification.save(
+        update_fields=["is_read"]
+    )
+
+    return Response(
+        {
+            "message": "Notification marked as read"
+        },
+        status=200
+    )
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_mark_all_notifications_read(request):
+
+    if not request.user.is_staff:
+        return Response(
+            {
+                "error": "Admin access required"
+            },
+            status=403
+        )
+
+    AdminNotification.objects.filter(
+        is_read=False
+    ).update(
+        is_read=True
+    )
+
+    return Response(
+        {
+            "message": "All notifications marked as read"
+        },
+        status=200
     )

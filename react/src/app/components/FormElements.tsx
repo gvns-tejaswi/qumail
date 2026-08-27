@@ -11,9 +11,10 @@ interface FormInputProps {
   rightEl?: React.ReactNode;
   value?: string;
   onChange?: (e: any) => void;
+  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
 }
 
-export function FormInput({ label, type, placeholder, icon, isDark, rightEl,value,onChange }: FormInputProps) {
+export function FormInput({ label, type, placeholder, icon, isDark, rightEl,value,onChange,onKeyDown }: FormInputProps) {
   const [focused, setFocused] = useState(false);
 
   return (
@@ -46,6 +47,7 @@ export function FormInput({ label, type, placeholder, icon, isDark, rightEl,valu
           onBlur={() => setFocused(false)}
           value={value}
           onChange={onChange}
+          onKeyDown={onKeyDown}
           autoComplete="off"
           className="w-full rounded-xl text-sm transition-all duration-200 placeholder:opacity-25"
           style={{

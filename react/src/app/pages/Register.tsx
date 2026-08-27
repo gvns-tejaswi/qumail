@@ -95,7 +95,7 @@ export default function Register() {
     // ----------------------------------------
 
     if (!name.trim()) {
-      newErrors.name = "Required";
+      newErrors.name = "Fullname is Required";
     } else if (!/^[A-Za-z ]+$/.test(name)) {
       // Only alphabets and spaces
       newErrors.name =
@@ -111,7 +111,7 @@ export default function Register() {
     // ----------------------------------------
 
     if (!email.trim()) {
-      newErrors.email = "Required";
+      newErrors.email = "Email is Required";
     } else if (!email.toLowerCase().endsWith("@qumail.io")) {
       newErrors.email =
         "Email must end with '@qumail.io'";
@@ -122,7 +122,7 @@ export default function Register() {
     // ----------------------------------------
 
     if (!phone.trim()) {
-      newErrors.phone = "Required";
+      newErrors.phone = "Phone number is Required";
     } else if (!/^\d+$/.test(phone)) {
       newErrors.phone =
         "Phone number must contain only digits";
@@ -136,7 +136,7 @@ export default function Register() {
     // ----------------------------------------
 
     if (!password) {
-      newErrors.password = "Required";
+      newErrors.password = "Password is Required";
 
       setShowPasswordRequirements(false);
     } else {
@@ -368,9 +368,25 @@ export default function Register() {
                 }
                 isDark={false}
                 value={name}
-                onChange={(e) =>
-                  setName(e.target.value)
-                }
+                onChange={(e) => {
+                  const value = e.target.value;
+
+                  if (/^[A-Za-z ]*$/.test(value)) {
+                    setName(value);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (
+                    !/[A-Za-z ]/.test(e.key) &&
+                    e.key !== "Backspace" &&
+                    e.key !== "Delete" &&
+                    e.key !== "Tab" &&
+                    e.key !== "ArrowLeft" &&
+                    e.key !== "ArrowRight"
+                  ) {
+                    e.preventDefault();
+                  }
+                }}
               />
 
               {errors.name && (
@@ -420,9 +436,25 @@ export default function Register() {
                 }
                 isDark={false}
                 value={phone}
-                onChange={(e) =>
-                  setPhone(e.target.value)
-                }
+                onChange={(e) => {
+                  const value = e.target.value;
+
+                  if (/^\d*$/.test(value)) {
+                    setPhone(value);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (
+                    !/[0-9]/.test(e.key) &&
+                    e.key !== "Backspace" &&
+                    e.key !== "Delete" &&
+                    e.key !== "Tab" &&
+                    e.key !== "ArrowLeft" &&
+                    e.key !== "ArrowRight"
+                  ) {
+                    e.preventDefault();
+                  }
+                }}
               />
 
               {errors.phone && (

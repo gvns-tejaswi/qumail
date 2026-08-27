@@ -17,17 +17,17 @@ Including another URLconf
 from django import views
 from django.contrib import admin
 from django.urls import path
-from emailapp.views import forgot_password, get_starred_mails, get_users, register, login, reply_all, reset_password, save_draft, search_mails,send_mail,inbox,decrypt_mail, send_otp, toggle_star, verify_forgot_otp 
+from emailapp.views import admin_mark_mail_read, forgot_password, get_starred_mails, get_users, register, login, reply_all, reset_password, save_draft, search_mails,send_mail,inbox,decrypt_mail, send_otp, toggle_star, verify_forgot_otp 
 from emailapp.views import reply_mail,get_drafts,get_sent_mails,get_trash_mails
 from emailapp.views import forward_mail,update_phone,profile,change_password,activity_statistics
 from emailapp.views import delete_mail, restore_mail,delete_account,permanent_delete_mail
 from emailapp.views import edit_mail,logout_user, login_history
-from emailapp.views import verify_otp,mail_counts,send_draft
-from emailapp.views import star_mail
+from emailapp.views import verify_otp,mail_counts,send_draft,admin_generate_temp_password,admin_user_activity
+from emailapp.views import star_mail,admin_users,admin_unread_notification_count,admin_notifications,admin_mark_notification_read
 from django.conf import settings
 from django.conf.urls.static import static
-from emailapp.views import download_attachment
-
+from emailapp.views import download_attachment,admin_generate_temp_password,admin_mark_all_notifications_read
+from emailapp.views import admin_mails, admin_reply
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -97,8 +97,49 @@ path(
     "delete-permanently/<int:mail_id>/",
     permanent_delete_mail
 ),
-]
+path(
+    "adminmails/",
+    admin_mails
+),
 
+path(
+    "adminreply/<int:mail_id>/",
+    admin_reply
+),
+path(
+    "adminmarkread/<int:mail_id>/",
+    admin_mark_mail_read
+),
+path(
+    "admingenerate-temp-password/<int:user_id>/",
+    admin_generate_temp_password
+),
+path(
+    "adminuser-activity/<int:user_id>/",
+    admin_user_activity
+),
+path(
+    "adminusers/",admin_users
+),
+path(
+    "admin-notifications/unread-count/",
+    admin_unread_notification_count
+),
+
+path(
+    "admin-notifications/",
+    admin_notifications
+),
+
+path(
+    "admin-notifications/<int:notification_id>/read/",
+    admin_mark_notification_read
+),
+path(
+    "admin-notifications/mark-all-read/",
+    admin_mark_all_notifications_read
+),
+]
 urlpatterns += static(
     settings.MEDIA_URL,
     document_root=settings.MEDIA_ROOT

@@ -101,6 +101,20 @@ class UserProfile(models.Model):
 
     otp = models.CharField(max_length=6, default="")
     otp_verified = models.BooleanField(default=False)
+        # Login security
+    failed_login_attempts = models.IntegerField(default=0)
+
+    is_locked = models.BooleanField(default=False)
+
+    # Temporary password
+    temporary_password_expiry = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    must_change_password = models.BooleanField(
+        default=False
+    )
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
@@ -197,3 +211,28 @@ class OTP(models.Model):
     def __str__(self):
 
         return self.otp
+class AdminNotification(models.Model):
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="admin_notifications"
+    )
+
+    message = models.TextField()
+
+    is_read = models.BooleanField(
+        default=False
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    notification_type = models.CharField(
+        max_length=50,
+        default="SECURITY"
+    )
+
+    def __str__(self):
+        return f"{self.user.username} - {self.notification_type}"
